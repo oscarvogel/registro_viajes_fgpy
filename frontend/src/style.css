@@ -1,0 +1,132 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .fg-card {
+    @apply rounded-md border border-gray-200 bg-white shadow-sm;
+  }
+
+  .fg-card-accent-green {
+    @apply fg-card border-t-4 border-t-green-500;
+  }
+
+  .fg-card-accent-amber {
+    @apply fg-card border-t-4 border-t-amber-500;
+  }
+
+  .fg-card-accent-red {
+    @apply fg-card border-t-4 border-t-red-500;
+  }
+
+  .fg-panel-accent {
+    @apply rounded-md border border-gray-200 border-l-4 border-l-green-500 bg-white shadow-sm;
+  }
+
+  .fg-btn {
+    @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:bg-gray-300;
+  }
+
+  .fg-btn-sm {
+    @apply min-h-8 px-3 py-1 text-xs;
+  }
+
+  .fg-btn-primary {
+    @apply fg-btn bg-green-600 text-white hover:bg-green-700 focus:ring-green-300;
+  }
+
+  .fg-btn-amber {
+    @apply fg-btn bg-amber-600 text-white hover:bg-amber-700 focus:ring-amber-300;
+  }
+
+  .fg-btn-blue {
+    @apply fg-btn bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-300;
+  }
+
+  .fg-btn-secondary {
+    @apply fg-btn bg-gray-200 text-gray-800 hover:bg-gray-300 focus:ring-gray-300;
+  }
+
+  .fg-input {
+    @apply rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-green-500 focus:ring-2 focus:ring-green-200;
+  }
+}
+
+html.dark {
+  color-scheme: dark;
+}
+
+html.dark body {
+  @apply bg-slate-950 text-slate-100;
+}
+
+html.dark .bg-gray-50 {
+  @apply bg-slate-950;
+}
+
+html.dark .bg-white,
+html.dark .fg-card,
+html.dark .fg-panel-accent {
+  @apply border-slate-700 bg-slate-900 text-slate-100 shadow-none;
+}
+
+html.dark .bg-gray-100,
+html.dark .bg-gray-200,
+html.dark .bg-green-50,
+html.dark .bg-green-100,
+html.dark .bg-amber-50 {
+  @apply bg-slate-800 text-slate-200;
+}
+
+html.dark .bg-red-50 {
+  @apply bg-red-950 text-red-200;
+}
+
+html.dark .border-gray-100,
+html.dark .border-gray-200,
+html.dark .border-gray-300,
+html.dark .divide-gray-100 > :not([hidden]) ~ :not([hidden]),
+html.dark .divide-gray-200 > :not([hidden]) ~ :not([hidden]) {
+  @apply border-slate-700;
+}
+
+html.dark .text-gray-900,
+html.dark .text-gray-800,
+html.dark .text-gray-700 {
+  @apply text-slate-100;
+}
+
+html.dark .text-gray-600,
+html.dark .text-gray-500 {
+  @apply text-slate-300;
+}
+
+html.dark .text-green-700,
+html.dark .text-green-600 {
+  @apply text-green-300;
+}
+
+html.dark .text-amber-800,
+html.dark .text-amber-700 {
+  @apply text-amber-300;
+}
+
+html.dark .text-red-700,
+html.dark .text-red-600 {
+  @apply text-red-300;
+}
+
+html.dark .fg-input,
+html.dark input,
+html.dark select,
+html.dark textarea {
+  @apply border-slate-600 bg-slate-950 text-slate-100 placeholder:text-slate-400;
+}
+
+html.dark .fg-btn-secondary {
+  @apply bg-slate-700 text-slate-100 hover:bg-slate-600;
+}
+
+html.dark .hover\:bg-gray-50:hover {
+  @apply bg-slate-800;
+}

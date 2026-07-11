@@ -1,0 +1,32 @@
+{
+  "name": "registro-viajes-app",
+  "private": true,
+  "version": "2026.01.23.0001",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/generate-version.mjs && vite",
+    "build": "node scripts/generate-version.mjs && node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build",
+    "test": "node --test tests/*.test.js",
+    "verify": "npm run test && npm run build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@sentry/tracing": "^7.88.0",
+    "@sentry/vue": "^7.88.0",
+    "autoskill": "^0.1.0",
+    "axios": "^1.16.1",
+    "idb": "^8.0.0",
+    "pinia": "^2.1.7",
+    "sweetalert2": "^11.26.17",
+    "vue": "^3.4.19",
+    "vue-router": "^4.2.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.4",
+    "autoprefixer": "^10.4.17",
+    "postcss": "^8.5.15",
+    "tailwindcss": "^3.4.1",
+    "vite": "^5.1.4",
+    "vite-plugin-pwa": "^0.19.0"
+  }
+}
