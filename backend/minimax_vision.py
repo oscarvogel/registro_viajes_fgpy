@@ -33,6 +33,12 @@ remito_numero; proveedor_candidato; peso_bruto; tara; neto; unidad_peso; patente
 chofer_observado; confidence (objeto por campo, solo para las claves de datos anteriores y con
 valores entre 0 y 1); warnings (array de textos).
 Usa null cuando un dato no sea visible. Conserva los pesos y su unidad tal como se observan.
+Para proveedor_candidato toma la razon social de DESTINATARIO DE LA MERCADERIA, no la del
+remitente ni la empresa que emitio el documento. En un numero como 002-003-0003677,
+remito_tipo son los primeros 3 digitos (002), remito_sucursal los siguientes 3 (003) y
+remito_numero los ultimos 7 (0003677); devuelve solo digitos en cada parte.
+Devuelve cada peso como texto copiando todos los digitos y separadores impresos, sin convertirlo
+ni reinterpretarlo: si el ticket muestra 49.690,00 kg devuelve "49.690,00", nunca 49.69.
 OCR no elige el chofer configurado, la patente configurada ni la unidad configurada: solo informa
 texto observado. No normalices datos de negocio ni inventes valores."""
 
@@ -277,6 +283,7 @@ class MiniMaxVisionClient:
         try:
             env = os.environ.copy()
             env["MINIMAX_API_KEY"] = key
+            env["MINIMAX_API_HOST"] = os.getenv("MINIMAX_API_HOST") or "https://api.minimax.io"
             response = self._executor(
                 argv=argv, messages=_messages(Path(image_path)), env=env,
                 timeout_seconds=timeout, max_output_bytes=maximum,

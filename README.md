@@ -56,6 +56,7 @@ Requisitos:
 - Git.
 - Python 3.12 o compatible.
 - Node.js y npm.
+- `uv`/`uvx` disponible para el usuario que ejecuta el backend (adaptador MCP de MiniMax).
 - Acceso a la base MySQL definida en `backend\.env`.
 
 Clonar el proyecto:
@@ -105,6 +106,77 @@ La API queda disponible en `http://127.0.0.1:8000/api`.
 
 No se deben guardar credenciales, claves JWT, conexiones de base de datos ni archivos `.env` reales en Git.
 
+### Carga de viajes desde imagen (OCR)
+
+El flujo **Cargar desde foto** envía JPEG, PNG o WebP al backend, extrae una propuesta con MiniMax y recién crea el viaje cuando el operador revisa y confirma. La imagen queda privada: se entrega únicamente por el endpoint autenticado, nunca como archivo estático. El OCR puede informar chofer y patente observados, pero el registro usa el usuario autenticado y la patente/unidad configuradas en el celular. El remito del proveedor queda vacío; el remito FGPY se conserva completo. Para este trayecto se guarda `pesaje_unico=true`, origen en cero, destino en toneladas y `cliente_id=NULL`.
+
+Instalar `uv` (incluye `uvx`) y verificar que lo vea el mismo usuario del servicio:
+
+```bash
+uvx --version
+```
+
+Configurar en `backend/.env` las variables documentadas en `backend/.env.example`:
+
+- `MINIMAX_API_KEY`: secreto de MiniMax, solo backend.
+- `MINIMAX_API_HOST`: `https://api.minimax.io` para claves globales (valor por defecto) o `https://api.minimaxi.com` para China continental; host y clave deben pertenecer a la misma región.
+- `MINIMAX_VISION_COMMAND`: por defecto `uvx minimax-coding-plan-mcp -y`.
+- `MINIMAX_VISION_TIMEOUT_SECONDS`: espera total del proceso MCP; por defecto 90 segundos.
+- `MINIMAX_VISION_MAX_OUTPUT_BYTES`: límite combinado de salida; por defecto 1 MiB.
+- `VIAJE_IMAGE_STORAGE_DIR`: ruta absoluta, privada y fuera del repositorio/directorio público.
+- `VIAJE_IMAGE_MAX_BYTES`: máximo por imagen; por defecto 10 MiB.
+- `VIAJE_IMAGE_TEMP_TTL_HOURS`: vida de una carga sin confirmar; por defecto 24 horas.
+- `IMAGE_TOKEN_SECRET`: secreto HMAC independiente de al menos 32 bytes.
+- `TRIP_IMAGE_CLEANUP_TIME`: horario local diario `HH:MM`; por defecto `03:00`.
+
+La evidencia confirmada se retiene **exactamente 60 días**. Es una regla fija del código, no una variable de ambiente. La limpieza diaria elimina temporales vencidas, evidencias vencidas y promociones huérfanas con controles de concurrencia e integridad.
+
+En Linux, preparar el almacenamiento antes de iniciar el servicio. Reemplazar `USUARIO_SERVICIO` y `GRUPO_SERVICIO` por la cuenta real; no dar acceso al usuario de Nginx:
+
+```bash
+sudo install -d -m 0700 -o USUARIO_SERVICIO -g GRUPO_SERVICIO /var/lib/registro-viajes/imagenes
+sudo -u USUARIO_SERVICIO test -r /var/lib/registro-viajes/imagenes
+sudo -u USUARIO_SERVICIO test -w /var/lib/registro-viajes/imagenes
+```
+
+El backend crea subdirectorios con permisos restrictivos, pero la cuenta del servicio debe poder leer, escribir, renombrar y borrar dentro de la raíz. No apuntar `VIAJE_IMAGE_STORAGE_DIR` a `frontend/public`, `frontend/dist`, `/var/www` ni otra ruta publicada.
+
+#### Migración MySQL
+
+Antes de migrar producción, confirmar la base seleccionada, inspeccionar la estructura actual y realizar un backup. El script agrega `pesaje_unico`, permite `cliente_id=NULL` y crea `viaje_imagenes`; no debe ejecutarse a ciegas:
+
+```bash
+mysqldump --single-transaction --routines --triggers BASE_DATOS tablero_produccion viaje_imagenes > backup-viaje-imagen-$(date +%Y%m%d-%H%M%S).sql
+mysql BASE_DATOS < backend/migrations/20260713_add_trip_image_ocr.sql
+mysql --table BASE_DATOS < backend/migrations/20260713_verify_trip_image_ocr.sql
+```
+
+Si `viaje_imagenes` todavía no existe, omitirla del primer `mysqldump` o respaldar la base completa. La migración es idempotente, pero se detiene si encuentra `token_hash` duplicados. La verificación es de solo lectura y debe mostrar:
+
+- `tablero_produccion.pesaje_unico` no nulo con valor por defecto `0`;
+- `tablero_produccion.cliente_id` nullable;
+- tabla InnoDB `viaje_imagenes`, FK hacia `tablero_produccion(id)`;
+- índice no único exacto sobre `expires_at` e índice único exacto sobre `token_hash`.
+
+#### Verificación del flujo OCR
+
+Ejecutar las pruebas focales del backend desde la raíz (usan bases aisladas, no producción):
+
+```powershell
+py -m pytest backend/test_minimax_vision.py backend/test_trip_image_normalization.py backend/test_image_storage.py backend/test_trip_image_api.py backend/test_trip_image_cleanup.py -q
+```
+
+Luego ejecutar la verificación completa compatible de backend y frontend:
+
+```powershell
+py -m pytest backend -q
+Set-Location frontend
+npm ci
+npm run verify
+```
+
+Un timeout de MiniMax devuelve un error controlado y no crea ningún viaje. Para diagnosticarlo, verificar primero `uvx --version`, que `MINIMAX_API_HOST` corresponda a la región de la clave, la conectividad saliente y luego ajustar `MINIMAX_VISION_TIMEOUT_SECONDS`. No iniciar el servidor MCP manualmente en producción ni registrar la clave o la salida cruda del proveedor en logs o tickets.
+
 ## Frontend
 
 Instalar dependencias y verificar:
@@ -139,11 +211,7 @@ El `--strict-ssl=false` fue necesario en esta máquina por un problema local de 
 
 ## Verificación actual
 
-- `frontend`: `npm test` pasa 56/56.
-- `frontend`: `npm run build` genera `dist/` correctamente.
-- `frontend`: `http://127.0.0.1:5173/` responde 200.
-- `backend`: `py -m pytest backend -q` pasa.
-- `backend`: `/api/panioles?limit=10000` responde 200 contra MySQL configurado por `.env`.
+Usar los comandos anteriores para obtener evidencia fresca en cada entrega. No se considera suficiente un conteo histórico de pruebas ni una respuesta previa del servidor.
 
 ## Documentación
 

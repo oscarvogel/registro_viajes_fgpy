@@ -44,6 +44,7 @@ class FakeExecutor:
     def __call__(self, **kwargs):
         safe = {key: value for key, value in kwargs.items() if key != "env"}
         safe["key_in_env"] = bool(kwargs["env"].get("MINIMAX_API_KEY"))
+        safe["api_host"] = kwargs["env"].get("MINIMAX_API_HOST")
         self.calls.append(safe)
         if self.error:
             raise self.error
@@ -74,6 +75,17 @@ class MiniMaxVisionClientTests(unittest.TestCase):
         self.assertNotIn("top-secret", repr(call))
         self.assertNotIn("top-secret", repr(self.client(executor)))
 
+    def test_api_host_defaults_to_global_and_allows_region_override(self):
+        default_executor = FakeExecutor(tool_response())
+        with patch.dict(os.environ, {}, clear=True):
+            self.client(default_executor).analyze(self.image)
+        self.assertEqual(default_executor.calls[0]["api_host"], "https://api.minimax.io")
+
+        mainland_executor = FakeExecutor(tool_response())
+        with patch.dict(os.environ, {"MINIMAX_API_HOST": "https://api.minimaxi.com"}, clear=True):
+            self.client(mainland_executor).analyze(self.image)
+        self.assertEqual(mainland_executor.calls[0]["api_host"], "https://api.minimaxi.com")
+
     def test_missing_key_is_configuration_error(self):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(MiniMaxVisionConfigurationError):
@@ -89,6 +101,10 @@ class MiniMaxVisionClientTests(unittest.TestCase):
         prompt = call["params"]["arguments"]["prompt"]
         self.assertIn("fecha_remision", prompt)
         self.assertIn("OCR no elige", prompt)
+        self.assertIn("DESTINATARIO DE LA MERCADERIA", prompt)
+        self.assertIn('49.690,00', prompt)
+        self.assertIn("nunca 49.69", prompt)
+        self.assertIn("primeros 3 digitos", prompt)
         self.assertNotIn("top-secret", json.dumps(messages))
 
     def test_single_json_fence_is_accepted(self):
