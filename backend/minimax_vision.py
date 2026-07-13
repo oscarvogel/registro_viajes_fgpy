@@ -164,6 +164,8 @@ class MiniMaxVisionClient:
         if not key:
             raise MiniMaxVisionConfigurationError("MINIMAX_API_KEY no esta configurada")
         command = self._command or os.getenv("MINIMAX_VISION_COMMAND", "uvx minimax-coding-plan-mcp -y")
+        failure = None
+        response = None
         try:
             timeout = float(self._timeout if self._timeout is not None else os.getenv("MINIMAX_VISION_TIMEOUT_SECONDS", "90"))
             maximum = int(self._max_output if self._max_output is not None else os.getenv("MINIMAX_VISION_MAX_OUTPUT_BYTES", str(1024 * 1024)))
@@ -178,15 +180,18 @@ class MiniMaxVisionClient:
         except MiniMaxVisionError:
             raise
         except TimeoutError:
-            raise MiniMaxVisionError("MiniMax Vision excedio el tiempo limite") from None
+            failure = "MiniMax Vision excedio el tiempo limite"
         except OverflowError:
-            raise MiniMaxVisionError("MiniMax Vision excedio el limite de salida") from None
+            failure = "MiniMax Vision excedio el limite de salida"
         except Exception:
-            raise MiniMaxVisionError("Fallo la comunicacion con MiniMax Vision") from None
+            failure = "Fallo la comunicacion con MiniMax Vision"
+        if failure is not None:
+            raise MiniMaxVisionError(failure)
         return _parse_response(response)
 
 
 def _parse_response(response: Any) -> dict[str, Any]:
+    parsed = None
     try:
         if not isinstance(response, dict) or "error" in response:
             raise ValueError
@@ -204,9 +209,12 @@ def _parse_response(response: Any) -> dict[str, Any]:
         if not isinstance(value, dict):
             raise ValueError
         _validate(value)
-        return {key: value[key] for key in _REQUIRED}
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise MiniMaxVisionError("Respuesta MiniMax Vision invalida") from exc
+        parsed = {key: value[key] for key in _REQUIRED}
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    if parsed is None:
+        raise MiniMaxVisionError("Respuesta MiniMax Vision invalida")
+    return parsed
 
 
 def _validate(value: dict[str, Any]) -> None:

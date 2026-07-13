@@ -105,6 +105,25 @@ class MiniMaxVisionClientTests(unittest.TestCase):
                 self.assertNotIn("top-secret", str(caught.exception))
                 self.assertNotIn("not json", str(caught.exception))
 
+    def test_json_parse_error_discards_sensitive_payload_from_entire_exception_chain(self):
+        sensitive = "MINIMAX_API_KEY=top-secret provider payload"
+        response = {"result": {"content": [{"type": "text", "text": sensitive}]}}
+        with self.assertRaises(MiniMaxVisionError) as caught:
+            self.client(FakeExecutor(response)).analyze(self.image)
+
+        pending = [caught.exception]
+        seen = set()
+        while pending:
+            error = pending.pop()
+            if error is None or id(error) in seen:
+                continue
+            seen.add(id(error))
+            exposed = [str(error), repr(error), repr(error.args), repr(getattr(error, "doc", None))]
+            self.assertTrue(all("top-secret" not in value for value in exposed))
+            pending.extend([error.__cause__, error.__context__])
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+
     def test_malformed_content_entries_are_sanitized_errors(self):
         for entry in (1, "top-secret", None, [], ["top-secret"]):
             with self.subTest(entry=entry):
@@ -114,6 +133,7 @@ class MiniMaxVisionClientTests(unittest.TestCase):
                 self.assertNotIsInstance(caught.exception, AttributeError)
                 self.assertNotIn("top-secret", str(caught.exception))
                 self.assertNotIn("top-secret", repr(caught.exception.__cause__))
+                self.assertNotIn("top-secret", repr(caught.exception.__context__))
 
     def test_executor_failures_are_explicit_and_sanitized(self):
         for error in (TimeoutError("top-secret timeout"), OverflowError("top-secret oversized")):
