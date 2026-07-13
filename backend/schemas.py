@@ -122,7 +122,9 @@ class RegistroViajeCreate(BaseModel):
     tara_origen: Optional[float] = None # tn (now optional)
     neto_origen: float # tn
     neto_destino: float # tn
-    peso_bruto_destino: float # kg
+    peso_bruto_destino: float # tn
+    tara_destino: Optional[float] = None # tn
+    pesaje_unico: bool = False
     
     chofer_id: int
     patente: str # Or equipo_id if we map it

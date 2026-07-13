@@ -1,6 +1,12 @@
 import sys
 import unittest
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
+
+from fastapi import HTTPException
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 class TripImageModelMetadataTest(unittest.TestCase):
@@ -65,6 +71,155 @@ class TripImageModelMetadataTest(unittest.TestCase):
         self.assertLess(migration.index(duplicate_query), migration.index(signal))
         self.assertLess(migration.index(signal), migration.index(drop_token_index))
         self.assertLess(migration.index(signal), migration.index(add_unique_token))
+
+
+class CreateTripServiceTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        backend_dir = Path(__file__).resolve().parent
+        if str(backend_dir) not in sys.path:
+            sys.path.insert(0, str(backend_dir))
+
+        import models
+        import schemas
+
+        cls.models = models
+        cls.schemas = schemas
+        cls.engine = create_engine("sqlite:///:memory:")
+        for table in (
+            models.Empleado.__table__,
+            models.Proveedor.__table__,
+            models.Cliente.__table__,
+            models.Equipo.__table__,
+            models.UnidadNegocio.__table__,
+            models.TableroProduccion.__table__,
+        ):
+            table.create(cls.engine)
+        cls.Session = sessionmaker(bind=cls.engine)
+
+    def setUp(self):
+        self.db = self.Session()
+        for model in (
+            self.models.TableroProduccion,
+            self.models.Equipo,
+            self.models.UnidadNegocio,
+            self.models.Proveedor,
+            self.models.Cliente,
+            self.models.Empleado,
+        ):
+            self.db.query(model).delete()
+        self.db.commit()
+
+        self.employee = self.models.Empleado(
+            id=10, nombre="Ana", apellido="Perez", email="a@example.com",
+            documento="123", fecha_contratacion=date(2020, 1, 1), activo=True,
+            porcentaje=0,
+        )
+        self.provider = self.models.Proveedor(id=20, razon_social="Proveedor", activo=True)
+        self.client = self.models.Cliente(id=1, razon_social="Cliente", activo=True)
+        self.unit = self.models.UnidadNegocio(id=3, descripcion="Transporte", activo=True)
+        self.equipment = self.models.Equipo(
+            id=30, descripcion="Camion", patente="AA 123 BB", nro_chasis="c",
+            nro_motor="m", tipo_movil_id=1, activo=True, movil_asociado=0, ult_hr_km=0,
+        )
+        self.db.add_all([self.employee, self.provider, self.client, self.unit, self.equipment])
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def payload(self, **overrides):
+        values = dict(
+            fecha_remision=date(2026, 7, 13), fecha_recepcion=date(2026, 7, 13),
+            proveedor_id=20, numero_remision="R-1", numero_remision_fpv="F-1",
+            peso_bruto_origen=48.5, tara_origen=16.5, neto_origen=32.0,
+            peso_bruto_destino=49.690, tara_destino=17.080, neto_destino=32.610,
+            chofer_id=10, patente="aa123bb", unidad_negocio_id=3, cliente_id=1,
+            observaciones="ok", pesaje_unico=False,
+        )
+        values.update(overrides)
+        return self.schemas.RegistroViajeCreate(**values)
+
+    def create_trip(self, registro, **kwargs):
+        from trip_service import create_trip
+        return create_trip(self.db, registro, self.employee, **kwargs)
+
+    def assert_bad_request(self, **overrides):
+        with self.assertRaises(HTTPException) as ctx:
+            self.create_trip(self.payload(**overrides))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_pesaje_unico_guarda_destino_produccion_y_cliente_nulo(self):
+        row = self.create_trip(self.payload(
+            pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+            tara_origen=0, neto_origen=0,
+        ))
+        self.assertEqual(row.neto_origen, Decimal("0.00"))
+        self.assertEqual(row.bruto_destino, Decimal("49.69"))
+        self.assertEqual(row.tara_destino, Decimal("17.08"))
+        self.assertEqual(row.neto_destino, Decimal("32.61"))
+        self.assertEqual(row.produccion, Decimal("32.61"))
+        self.assertTrue(row.pesaje_unico)
+        self.assertIsNone(row.cliente_id)
+
+    def test_normal_rechaza_origen_no_positivo_y_produce_desde_origen(self):
+        self.assert_bad_request(neto_origen=0)
+        row = self.create_trip(self.payload(numero_remision="R-2", numero_remision_fpv="F-2"))
+        self.assertEqual(row.produccion, Decimal("32.00"))
+        self.assertFalse(row.pesaje_unico)
+
+    def test_pesaje_unico_rechaza_origen_no_cero(self):
+        for field in ("peso_bruto_origen", "tara_origen", "neto_origen"):
+            values = dict(pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+                          tara_origen=0, neto_origen=0)
+            values[field] = 1
+            self.assert_bad_request(**values)
+
+    def test_pesaje_unico_rechaza_pesos_destino_invalidos(self):
+        base = dict(pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+                    tara_origen=0, neto_origen=0)
+        for changes in (
+            {"neto_destino": 0}, {"peso_bruto_destino": -1},
+            {"tara_destino": -1}, {"neto_destino": 81},
+            {"peso_bruto_destino": 81}, {"tara_destino": 81},
+            {"peso_bruto_destino": 49.690, "tara_destino": 17.000, "neto_destino": 32.610},
+        ):
+            self.assert_bad_request(**(base | changes))
+
+    def test_normal_preserva_mapeo_defaults_duplicados_y_normalizacion(self):
+        row = self.create_trip(self.payload(proveedor_id=None, cliente_id=None))
+        self.assertEqual(row.proveedor_id, None)
+        self.assertEqual(row.cliente_id, 1)
+        self.assertEqual(row.equipo_id, 30)
+        self.assertEqual(row.unidad_negocio_id, 3)
+        self.assertEqual(row.remito_proveedor, "R-1")
+        self.assertEqual(row.remito_fgpy, "F-1")
+        self.assertEqual(row.bruto_destino, Decimal("48.50"))
+        self.assertEqual(row.tara_destino, Decimal("16.50"))
+        self.assertEqual(row.usuario, "10")
+        self.assert_bad_request(numero_remision="R-1", numero_remision_fpv="F-9")
+        self.assert_bad_request(numero_remision="R-9", numero_remision_fpv="F-1")
+
+    def test_commit_false_flushes_y_outer_rollback_removes_row(self):
+        row = self.create_trip(self.payload(), commit=False)
+        self.assertIsNotNone(row.id)
+        row_id = row.id
+        self.db.rollback()
+        self.assertIsNone(self.db.get(self.models.TableroProduccion, row_id))
+
+    def test_commit_true_commits(self):
+        row_id = self.create_trip(self.payload(), commit=True).id
+        self.db.close()
+        self.db = self.Session()
+        self.assertIsNotNone(self.db.get(self.models.TableroProduccion, row_id))
+
+    def test_identidad_efectiva_es_explicita_y_debe_estar_activa(self):
+        row = self.create_trip(self.payload())
+        self.assertEqual(row.empleado_id, self.employee.id)
+        self.assertEqual(row.usuario, str(self.employee.id))
+        self.employee.activo = False
+        self.db.commit()
+        self.assert_bad_request(numero_remision="R-2", numero_remision_fpv="F-2")
 
 
 if __name__ == "__main__":

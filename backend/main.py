@@ -25,6 +25,7 @@ from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 import models, schemas, database
+from trip_service import create_trip
 from logger import app_logger, log_api_request, log_user_action, log_system_event, sanitize_for_logging, set_request_context, clear_request_context
 # Initialize Sentry as early as possible
 
@@ -638,6 +639,16 @@ def create_registro_viaje(
     db: Session = Depends(get_db),
     current_user: models.Empleado = Depends(get_current_user),
 ):
+    if registro.chofer_id != current_user.id:
+        raise HTTPException(status_code=403, detail="El chofer debe coincidir con el usuario autenticado")
+    try:
+        nuevo_registro = create_trip(db, registro, current_user)
+        return {"id": nuevo_registro.id, "message": "Viaje registrado OK"}
+    finally:
+        clear_request_context()
+
+
+def _create_registro_viaje_legacy(registro, db):
     # LÃ³gica de cÃ¡lculo y mapeo
     
     # 1. Calcular ProducciÃ³n (Net Weight in kg or Tn?)
