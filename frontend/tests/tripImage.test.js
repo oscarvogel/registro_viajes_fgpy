@@ -3,7 +3,10 @@ import test from 'node:test'
 import {
   analyzeTripImage,
   confirmTripImage,
+  createTripImageObjectUrl,
+  fetchTripImageBlob,
   mapTripImageError,
+  revokeTripImageObjectUrl,
   tripImageUrl,
 } from '../src/services/tripImage.js'
 import {
@@ -49,6 +52,25 @@ test('confirmTripImage posts payload unchanged and tripImageUrl validates and en
   for (const id of [0, -1, 1.2, '1', '../secret']) assert.throws(() => tripImageUrl(id, '/api'), /id/i)
 })
 
+test('fetchTripImageBlob uses authenticated injected GET and validates image Blob', async () => {
+  const blob = new Blob(['image'], { type: 'image/jpeg' })
+  let request
+  const http = { get: async (...args) => { request = args; return { data: blob } } }
+  assert.equal(await fetchTripImageBlob(12, http, '/api'), blob)
+  assert.deepEqual(request, ['/api/registro-viaje/imagenes/12', { responseType: 'blob' }])
+  await assert.rejects(() => fetchTripImageBlob(12, { get: async () => ({ data: new Blob(['x'], { type: 'text/html' }) }) }, '/api'), /imagen/i)
+})
+
+test('image object URL helpers inject lifecycle API and reject non-image data', () => {
+  const blob = new Blob(['image'], { type: 'image/png' })
+  const calls = []
+  const urlApi = { createObjectURL: (value) => { calls.push(['create', value]); return 'blob:safe' }, revokeObjectURL: (url) => calls.push(['revoke', url]) }
+  assert.equal(createTripImageObjectUrl(blob, urlApi), 'blob:safe')
+  revokeTripImageObjectUrl('blob:safe', urlApi)
+  assert.deepEqual(calls, [['create', blob], ['revoke', 'blob:safe']])
+  assert.throws(() => createTripImageObjectUrl(new Blob(['x'], { type: '' }), urlApi), /imagen/i)
+})
+
 test('mapTripImageError returns safe Spanish actions without reflecting backend details', () => {
   const expected = {
     400: ['La solicitud de imagen no es válida.', false], 401: ['Tu sesión venció. Iniciá sesión nuevamente.', false],
@@ -56,6 +78,8 @@ test('mapTripImageError returns safe Spanish actions without reflecting backend 
     410: ['La imagen venció. Volvé a analizarla.', true], 413: ['La imagen es demasiado grande.', false],
     422: ['Revisá los datos detectados antes de confirmar.', false], 502: ['El servicio de lectura no está disponible.', true],
     503: ['El servicio de lectura no está disponible.', true], 504: ['El servicio tardó demasiado en responder.', true],
+    404: ['No se encontró la imagen solicitada.', false], 429: ['Hay demasiadas solicitudes. Esperá un momento e intentá nuevamente.', true],
+    500: ['El servidor no pudo procesar la imagen.', true],
   }
   for (const [status, [message, retry]] of Object.entries(expected)) {
     const mapped = mapTripImageError({ response: { status: Number(status), data: { detail: 'C:\\secret upload_token=abc' } } })
@@ -102,6 +126,19 @@ test('readTripImageSettings safely reports corrupt, missing or inactive settings
   assert.ok(result.errors.length >= 2)
 })
 
+test('readTripImageSettings requires explicit active flags and tolerates throwing storage', () => {
+  const missingFlags = {
+    empleados: [{ id: 7, nombre: 'Ana' }], equipos: [{ id: 2, patente: 'AB 123 CD' }],
+    unidadesNegocio: [{ id: 4 }], proveedores: [{ id: 8 }],
+  }
+  const inactive = readTripImageSettings({ storage: storage({ user: '{"id":7}', default_patente: 'AB 123 CD', default_unidad_negocio: '4' }), catalog: missingFlags })
+  assert.equal(inactive.complete, false)
+  assert.deepEqual(inactive.activeProviderIds, [])
+  const throwing = readTripImageSettings({ storage: { getItem: () => { throw new Error('C:\\secret token') } }, catalog })
+  assert.equal(throwing.complete, false)
+  assert.doesNotMatch(JSON.stringify(throwing), /secret|token/i)
+})
+
 const analysis = { upload_token: 'opaque', proposal: {
   fecha_remision: '2026-07-12', numero_remision_fpv: '001-002-0000003', proveedor_id: 8,
   peso_bruto_destino: 49.69, tara_destino: '17.080', neto_destino: 32.61,
@@ -127,6 +164,13 @@ test('createReviewModel keeps editable OCR data, current config and mismatch war
   assert.equal(review.observed.patente, 'ZZ999ZZ')
   assert.ok(review.warnings.some((warning) => /patente/i.test(warning)))
   assert.ok(review.warnings.some((warning) => /chofer/i.test(warning)))
+})
+
+test('createReviewModel accepts observed full driver in either name order', () => {
+  for (const chofer_observado of ['Ana Pérez', 'Pérez Ana']) {
+    const review = createReviewModel({ ...analysis, proposal: { ...analysis.proposal, chofer_observado } }, settings, '2026-07-13')
+    assert.equal(review.warnings.some((warning) => /chofer observado/i.test(warning)), false)
+  }
 })
 
 test('weight helpers preserve three decimals and conservatively reject invalid input', () => {
@@ -186,12 +230,28 @@ test('buildConfirmPayload trims token and rejects blank or unauthorized provider
   assert.throws(() => buildConfirmPayload(valid, settings), /proveedor/i)
 })
 
+test('buildConfirmPayload checks balance with exact integer millitons', () => {
+  const boundary = createReviewModel({ ...analysis, proposal: {
+    ...analysis.proposal, peso_bruto_destino: '100.000', tara_destino: '17.080', neto_destino: '82.910',
+  } }, settings, '2026-07-13')
+  assert.deepEqual([
+    buildConfirmPayload(boundary, settings).peso_bruto_destino,
+    buildConfirmPayload(boundary, settings).tara_destino,
+    buildConfirmPayload(boundary, settings).neto_destino,
+  ], [100, 17.08, 82.91])
+  boundary.neto_destino = '82.909'
+  assert.throws(() => buildConfirmPayload(boundary, settings), /pesos/i)
+})
+
 test('transitionReviewState allows only defined workflow transitions', () => {
   assert.equal(transitionReviewState('selecting', 'PROCESS'), 'processing')
   assert.equal(transitionReviewState('processing', 'ANALYZED'), 'reviewing')
   assert.equal(transitionReviewState('reviewing', 'CONFIRM'), 'confirming')
   assert.equal(transitionReviewState('confirming', 'CONFIRMED'), 'success')
   assert.equal(transitionReviewState('error', 'RETRY'), 'processing')
+  assert.equal(transitionReviewState('error', 'REVIEW'), 'reviewing')
+  assert.equal(transitionReviewState('processing', 'FAIL'), 'error')
+  assert.equal(transitionReviewState('confirming', 'FAIL'), 'error')
   assert.throws(() => transitionReviewState('selecting', 'CONFIRMED'), /transición/i)
   assert.throws(() => transitionReviewState('unknown', 'PROCESS'), /estado/i)
 })

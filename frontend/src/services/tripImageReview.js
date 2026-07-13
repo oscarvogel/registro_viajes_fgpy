@@ -5,7 +5,7 @@ const positiveInteger = (value) => {
 
 const normalizedText = (value) => String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
 const scalarText = (value) => String(value ?? '').trim()
-const active = (item) => item && item.activo !== false && item.active !== false
+const active = (item) => item?.activo === true
 const list = (value) => Array.isArray(value) ? value : []
 const userSnapshot = (value) => value ? Object.freeze({
   id: positiveInteger(value.id),
@@ -28,16 +28,25 @@ const unitSnapshot = (value) => value ? Object.freeze({
 
 export const readTripImageSettings = ({ storage, catalog = {} }) => {
   const errors = []
+  const stored = {}
+  for (const key of ['user', 'default_patente', 'default_unidad_negocio']) {
+    try {
+      stored[key] = storage?.getItem(key) ?? null
+    } catch {
+      stored[key] = null
+      errors.push('No se pudo leer la configuración guardada.')
+    }
+  }
   let userId = null
   try {
-    userId = positiveInteger(JSON.parse(storage?.getItem('user') ?? 'null')?.id)
+    userId = positiveInteger(JSON.parse(stored.user ?? 'null')?.id)
   } catch {
     errors.push('La sesión guardada no es válida.')
   }
 
-  const patente = String(storage?.getItem('default_patente') ?? '').trim().toUpperCase()
-  const unidadNegocioId = positiveInteger(storage?.getItem('default_unidad_negocio'))
-  if (!unidadNegocioId && storage?.getItem('default_unidad_negocio')) errors.push('La unidad de negocio guardada no es válida.')
+  const patente = String(stored.default_patente ?? '').trim().toUpperCase()
+  const unidadNegocioId = positiveInteger(stored.default_unidad_negocio)
+  if (!unidadNegocioId && stored.default_unidad_negocio) errors.push('La unidad de negocio guardada no es válida.')
 
   const user = userSnapshot(list(catalog.empleados).find((item) => active(item) && positiveInteger(item.id) === userId))
   const equipo = equipmentSnapshot(list(catalog.equipos).find((item) => active(item) && normalizedText(item.patente) === normalizedText(patente)))
@@ -75,6 +84,15 @@ export const parseWeight = (value) => {
   return number
 }
 
+const parseMillitons = (value) => {
+  const text = String(value ?? '').trim().replace(',', '.')
+  if (!WEIGHT_PATTERN.test(text)) throw new TypeError('El peso debe ser un decimal válido.')
+  const [whole, decimals = ''] = text.split('.')
+  const millitons = (Number(whole) * 1000) + Number(decimals.padEnd(3, '0'))
+  if (!Number.isSafeInteger(millitons) || millitons < 0) throw new TypeError('El peso debe ser finito y no negativo.')
+  return millitons
+}
+
 export const formatWeight = (value) => parseWeight(value).toFixed(3)
 
 const observedValue = (proposal, ...names) => names.map((name) => proposal[name]).find((value) => value != null) ?? ''
@@ -87,8 +105,10 @@ export const createReviewModel = (analysis, settings, today) => {
   if (observedPlate && normalizedText(observedPlate) !== normalizedText(settings?.patente)) {
     warnings.push('La patente observada no coincide con la configuración actual.')
   }
-  const configuredDriver = settings?.user?.nombre || settings?.user?.name || ''
-  if (observedDriver && normalizedText(observedDriver) !== normalizedText(configuredDriver)) {
+  const userName = settings?.user?.nombre || ''
+  const userSurname = settings?.user?.apellido || ''
+  const configuredDrivers = [normalizedText(`${userName} ${userSurname}`), normalizedText(`${userSurname} ${userName}`)]
+  if (observedDriver && !configuredDrivers.includes(normalizedText(observedDriver))) {
     warnings.push('El chofer observado no coincide con el usuario actual.')
   }
   const config = Object.freeze({
@@ -147,11 +167,11 @@ export const buildConfirmPayload = (review, settings) => {
   if (!validConfig) {
     throw new TypeError('La configuración del viaje está incompleta.')
   }
-  const bruto = parseWeight(review?.peso_bruto_destino)
-  const tara = parseWeight(review?.tara_destino)
-  const neto = parseWeight(review?.neto_destino)
-  if (bruto <= 0 || tara < 0 || neto <= 0) throw new TypeError('Los pesos bruto y neto deben ser mayores que cero.')
-  if (Math.abs(bruto - tara - neto) > 0.01 + Number.EPSILON) throw new TypeError('Los pesos no cierran dentro de la tolerancia permitida.')
+  const brutoM = parseMillitons(review?.peso_bruto_destino)
+  const taraM = parseMillitons(review?.tara_destino)
+  const netoM = parseMillitons(review?.neto_destino)
+  if (brutoM <= 0 || taraM < 0 || netoM <= 0) throw new TypeError('Los pesos bruto y neto deben ser mayores que cero.')
+  if (Math.abs((brutoM - taraM) - netoM) > 10) throw new TypeError('Los pesos no cierran dentro de la tolerancia permitida.')
   if (!REMITO.test(String(review?.numero_remision_fpv))) throw new TypeError('El remito debe tener formato 000-000-0000000.')
   const proveedorId = positiveInteger(review?.proveedor_id)
   if (!proveedorId || !Array.isArray(settings?.activeProviderIds) || !settings.activeProviderIds.includes(proveedorId)) {
@@ -167,9 +187,9 @@ export const buildConfirmPayload = (review, settings) => {
     proveedor_id: proveedorId,
     patente: settings.patente,
     unidad_negocio_id: settings.unidadNegocioId,
-    peso_bruto_destino: bruto,
-    tara_destino: tara,
-    neto_destino: neto,
+    peso_bruto_destino: brutoM / 1000,
+    tara_destino: taraM / 1000,
+    neto_destino: netoM / 1000,
     observaciones: String(review.observaciones ?? '').trim(),
   }
 }
@@ -180,7 +200,7 @@ const TRANSITIONS = {
   reviewing: { CONFIRM: 'confirming', FAIL: 'error', RESET: 'selecting' },
   confirming: { CONFIRMED: 'success', FAIL: 'error' },
   success: { RESET: 'selecting' },
-  error: { RETRY: 'processing', RESET: 'selecting' },
+  error: { RETRY: 'processing', REVIEW: 'reviewing', RESET: 'selecting' },
 }
 
 export const transitionReviewState = (state, event) => {

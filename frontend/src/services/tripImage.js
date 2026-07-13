@@ -22,6 +22,27 @@ export const tripImageUrl = (id, apiUrl = API_URL) => {
   return endpoint(apiUrl, `/registro-viaje/imagenes/${encodeURIComponent(String(id))}`)
 }
 
+const isImageBlob = (value) => (
+  typeof Blob !== 'undefined'
+  && value instanceof Blob
+  && /^image\/[a-z0-9.+-]+$/i.test(value.type)
+)
+
+export const fetchTripImageBlob = async (id, httpClient = axios, apiUrl = API_URL) => {
+  const response = await httpClient.get(tripImageUrl(id, apiUrl), { responseType: 'blob' })
+  if (!isImageBlob(response?.data)) throw new TypeError('La respuesta no contiene una imagen válida.')
+  return response.data
+}
+
+export const createTripImageObjectUrl = (blob, urlApi = URL) => {
+  if (!isImageBlob(blob) || typeof urlApi?.createObjectURL !== 'function') throw new TypeError('No se puede mostrar una imagen inválida.')
+  return urlApi.createObjectURL(blob)
+}
+
+export const revokeTripImageObjectUrl = (url, urlApi = URL) => {
+  if (typeof url === 'string' && url && typeof urlApi?.revokeObjectURL === 'function') urlApi.revokeObjectURL(url)
+}
+
 const ERROR_BY_STATUS = {
   400: ['La solicitud de imagen no es válida.', false],
   401: ['Tu sesión venció. Iniciá sesión nuevamente.', false],
@@ -30,6 +51,9 @@ const ERROR_BY_STATUS = {
   410: ['La imagen venció. Volvé a analizarla.', true],
   413: ['La imagen es demasiado grande.', false],
   422: ['Revisá los datos detectados antes de confirmar.', false],
+  404: ['No se encontró la imagen solicitada.', false],
+  429: ['Hay demasiadas solicitudes. Esperá un momento e intentá nuevamente.', true],
+  500: ['El servidor no pudo procesar la imagen.', true],
   502: ['El servicio de lectura no está disponible.', true],
   503: ['El servicio de lectura no está disponible.', true],
   504: ['El servicio tardó demasiado en responder.', true],
