@@ -258,6 +258,23 @@ const submitForm = async () => {
         <div class="text-xs px-2 py-1 rounded bg-orange-100 text-orange-800" v-else>Offline</div>
     </header>
 
+    <section class="bg-gradient-to-br from-emerald-50 to-blue-50 dark:from-emerald-950/40 dark:to-blue-950/40 p-4 rounded-xl shadow-sm mb-6 border border-emerald-200 dark:border-emerald-800/60">
+        <div class="flex items-start gap-3">
+            <div class="shrink-0 rounded-full bg-emerald-600 p-2 text-white" aria-hidden="true">
+                <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h1l2-3h8l2 3h1a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9zm9 8a4 4 0 100-8 4 4 0 000 8z" />
+                </svg>
+            </div>
+            <div class="min-w-0 flex-1">
+                <h2 class="text-lg font-semibold text-emerald-950 dark:text-emerald-100">Cargar desde foto</h2>
+                <p class="mt-1 text-sm text-emerald-800 dark:text-emerald-200">Foto de remito y ticket de balanza</p>
+                <button type="button" @click="router.push('/new-trip/image')" class="mt-4 min-h-11 w-full rounded-lg bg-emerald-600 px-4 py-2 font-medium text-white shadow hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2">
+                    Abrir cámara o elegir imagen
+                </button>
+            </div>
+        </div>
+    </section>
+
     <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6 border border-amber-100 dark:border-amber-900/40">
         <div class="flex items-start justify-between gap-4">
             <div>

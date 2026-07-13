@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Login from '../views/Login.vue'
 import NewTrip from '../views/NewTrip.vue'
+import TripImageUpload from '../views/TripImageUpload.vue'
 import Dashboard from '../views/Dashboard.vue'
 import History from '../views/History.vue'
 import Settings from '../views/Settings.vue'
@@ -15,6 +16,7 @@ const routes = [
   { path: '/login', component: Login, meta: { hideNavbar: true } },
   { path: '/dashboard', component: Dashboard, meta: { requiresAuth: true } },
   { path: '/new-trip', component: NewTrip, meta: { requiresAuth: true } },
+  { path: '/new-trip/image', component: TripImageUpload, meta: { requiresAuth: true } },
   { path: '/history', component: History, meta: { requiresAuth: true } },
   { path: '/fuel-load', component: FuelLoad, meta: { requiresAuth: true } },
   { path: '/carreton-move', component: CarretonMove, meta: { requiresAuth: true } },
