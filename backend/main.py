@@ -12,6 +12,7 @@ from typing import List, Optional
 from datetime import datetime, date, time, timedelta, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager
+from starlette.concurrency import run_in_threadpool
 import time as time_module
 import os
 import logging
@@ -648,7 +649,7 @@ def get_trip_image_vision():
 
 
 def get_trip_image_service(db: Session):
-    return TripImageService(db, get_trip_image_storage(), get_trip_image_vision())
+    return TripImageService(db, get_trip_image_storage(), session_factory=database.SessionLocal)
 
 
 @api_router.post("/registro-viaje", response_model=schemas.RegistroViajeResponse)
@@ -671,7 +672,10 @@ async def analyze_trip_image(file: UploadFile = File(...), db: Session = Depends
     try:
         storage = get_trip_image_storage()
         data = await file.read(storage.max_bytes + 1)
-        return TripImageService(db, storage, get_trip_image_vision()).analyze(data, file.filename or "image", file.content_type or "")
+        if len(data) > storage.max_bytes:
+            raise HTTPException(413, "La imagen excede el limite permitido")
+        service = TripImageService(db, storage, get_trip_image_vision(), session_factory=database.SessionLocal)
+        return await run_in_threadpool(service.analyze, data, file.filename or "image", file.content_type or "")
     except ImageStorageConfigError:
         raise HTTPException(503, "Servicio de imagen no disponible")
     except (ImageValidationError, ImageStoragePathError) as exc:

@@ -4,7 +4,7 @@ import unittest
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import patch, AsyncMock
 import tempfile
 import asyncio
 
@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 
 class TripImageModelMetadataTest(unittest.TestCase):
@@ -373,7 +374,7 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         import models, schemas
         root = tempfile.TemporaryDirectory(); self.addCleanup(root.cleanup)
         storage = ImageStorage(Path(root.name).resolve(), "x" * 32, temporary_ttl=__import__('datetime').timedelta(hours=1), now=(lambda: clock[0]) if clock else None)
-        engine = create_engine("sqlite:///:memory:")
+        engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
         for table in (models.Empleado.__table__, models.Proveedor.__table__, models.Equipo.__table__, models.UnidadNegocio.__table__, models.TableroProduccion.__table__, models.ViajeImagen.__table__):
             table.create(engine)
         db = sessionmaker(bind=engine)()
@@ -390,7 +391,7 @@ class TripImageEndpointServiceTest(unittest.TestCase):
             unidad_negocio_id=3, peso_bruto_destino=49.690, tara_destino=17.080,
             neto_destino=32.610, observaciones="revisado",
         )
-        return db, storage, user, request
+        return db, storage, user, request, sessionmaker(bind=engine)
 
     def test_analysis_saves_bounded_image_normalizes_and_matches_unique_provider(self):
         from image_storage import ImageStorage
@@ -441,8 +442,8 @@ class TripImageEndpointServiceTest(unittest.TestCase):
     def test_confirm_uses_current_user_and_is_idempotent(self):
         from trip_image_service import TripImageService
         import models
-        db, storage, user, request = self.make_confirm_fixture()
-        service = TripImageService(db, storage, object())
+        db, storage, user, request, factory = self.make_confirm_fixture()
+        service = TripImageService(db, storage, object(), session_factory=factory)
         first = service.confirm(request, user)
         second = service.confirm(request, user)
         self.assertEqual(first, second)
@@ -461,8 +462,8 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         from trip_image_service import TripImageService
         import models
         from sqlalchemy.exc import SQLAlchemyError
-        db, storage, user, request = self.make_confirm_fixture()
-        service = TripImageService(db, storage, object())
+        db, storage, user, request, factory = self.make_confirm_fixture()
+        service = TripImageService(db, storage, object(), session_factory=factory)
         with patch.object(db, "commit", side_effect=SQLAlchemyError("secret")):
             with self.assertRaises(SQLAlchemyError):
                 service.confirm(request, user)
@@ -477,8 +478,8 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         import models
         from sqlalchemy.exc import SQLAlchemyError
         clock = [datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)]
-        db, storage, user, request = self.make_confirm_fixture(clock)
-        service = TripImageService(db, storage, object())
+        db, storage, user, request, factory = self.make_confirm_fixture(clock)
+        service = TripImageService(db, storage, object(), session_factory=factory)
         original_promote = storage.promote
         def promote_then_expire(*args, **kwargs):
             result = original_promote(*args, **kwargs)
@@ -498,14 +499,57 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         from image_storage import ImageStoragePathError
         import models
         from sqlalchemy.exc import SQLAlchemyError
-        db, storage, user, request = self.make_confirm_fixture()
-        service = TripImageService(db, storage, object())
+        db, storage, user, request, factory = self.make_confirm_fixture()
+        service = TripImageService(db, storage, object(), session_factory=factory)
         with patch.object(db, "commit", side_effect=SQLAlchemyError("commit failed")), patch.object(storage, "revert_promotion", side_effect=ImageStoragePathError("private path")):
             with self.assertRaises(SQLAlchemyError) as caught:
                 service.confirm(request, user)
         self.assertEqual(str(caught.exception), "commit failed")
         self.assertEqual(db.query(models.TableroProduccion).count(), 0)
         self.assertEqual(db.query(models.ViajeImagen).count(), 0)
+
+    def test_lost_commit_ack_reconciles_without_deleting_image(self):
+        from trip_image_service import TripImageService
+        import models
+        from sqlalchemy.exc import SQLAlchemyError
+        db, storage, user, request, factory = self.make_confirm_fixture()
+        service = TripImageService(db, storage, None, session_factory=factory)
+        real_commit = db.commit
+        def commit_then_lose_ack():
+            real_commit()
+            raise SQLAlchemyError("lost ack")
+        with patch.object(db, "commit", side_effect=commit_then_lose_ack):
+            result = service.confirm(request, user)
+        check = factory()
+        evidence = check.get(models.ViajeImagen, result["imagen_id"])
+        self.assertIsNotNone(evidence)
+        self.assertTrue((storage.root / evidence.storage_path).is_file())
+        check.close()
+
+    def test_unknown_commit_outcome_keeps_receipt_and_original_error(self):
+        from trip_image_service import TripImageService
+        from sqlalchemy.exc import SQLAlchemyError
+        db, storage, user, request, factory = self.make_confirm_fixture()
+        service = TripImageService(db, storage, None, session_factory=lambda: (_ for _ in ()).throw(SQLAlchemyError("reconcile unavailable")))
+        with patch.object(db, "commit", side_effect=SQLAlchemyError("commit failed")):
+            with self.assertRaisesRegex(SQLAlchemyError, "commit failed"):
+                service.confirm(request, user)
+        self.assertTrue(list(storage.root.glob("confirmed/**/*.jpg")))
+        self.assertTrue(list(storage.root.glob("receipts/*.json")))
+
+    def test_failed_compensation_receipt_allows_next_confirm_to_recover(self):
+        from trip_image_service import TripImageService
+        from image_storage import ImageStoragePathError
+        from sqlalchemy.exc import SQLAlchemyError
+        import models
+        db, storage, user, request, factory = self.make_confirm_fixture()
+        service = TripImageService(db, storage, None, session_factory=factory)
+        with patch.object(db, "commit", side_effect=SQLAlchemyError("commit failed")), patch.object(storage, "revert_promotion", side_effect=ImageStoragePathError("private")):
+            with self.assertRaises(SQLAlchemyError):
+                service.confirm(request, user)
+        recovered = service.confirm(request, user)
+        self.assertEqual(db.query(models.ViajeImagen).count(), 1)
+        self.assertTrue((storage.root / db.get(models.ViajeImagen, recovered["imagen_id"]).storage_path).is_file())
 
     def test_all_image_routes_require_authentication(self):
         sentry_sdk = types.ModuleType("sentry_sdk"); sentry_sdk.init = lambda *a, **k: None
@@ -528,8 +572,8 @@ class TripImageEndpointServiceTest(unittest.TestCase):
 
     def test_image_route_enforces_owner_and_private_response(self):
         import main, models
-        db, storage, user, request = self.make_confirm_fixture()
-        result = __import__("trip_image_service").TripImageService(db, storage, object()).confirm(request, user)
+        db, storage, user, request, factory = self.make_confirm_fixture()
+        result = __import__("trip_image_service").TripImageService(db, storage, object(), session_factory=factory).confirm(request, user)
         with patch("main.get_trip_image_storage", return_value=storage), patch("main.clear_request_context") as clear:
             response = main.get_trip_image(result["imagen_id"], db, user)
         self.assertEqual(Path(response.path).read_bytes(), b"\xff\xd8\xffdata")
@@ -568,4 +612,62 @@ class TripImageEndpointServiceTest(unittest.TestCase):
             with self.assertRaises(HTTPException) as too_large:
                 asyncio.run(main.analyze_trip_image(upload, object(), object()))
         self.assertEqual(upload.requested, 6)
-        self.assertEqual(too_large.exception.status_code, 400)
+        self.assertEqual(too_large.exception.status_code, 413)
+
+    def test_analyze_dispatches_blocking_service_to_threadpool(self):
+        import main
+        from image_storage import ImageStorage
+        root = tempfile.TemporaryDirectory(); self.addCleanup(root.cleanup)
+        storage = ImageStorage(Path(root.name).resolve(), "x" * 32, max_bytes=100)
+        class Upload:
+            filename = "x.jpg"; content_type = "image/jpeg"
+            async def read(self, size): return b"\xff\xd8\xffx"
+        expected = {"upload_token": "token", "proposal": {}}
+        runner = AsyncMock(return_value=expected)
+        with patch("main.get_trip_image_storage", return_value=storage), patch("main.get_trip_image_vision", return_value=object()), patch("main.run_in_threadpool", runner):
+            result = asyncio.run(main.analyze_trip_image(Upload(), object(), object()))
+        self.assertEqual(result, expected)
+        runner.assert_awaited_once()
+
+    def test_confirmation_factory_does_not_construct_vision(self):
+        import main
+        db, storage, user, request, factory = self.make_confirm_fixture()
+        with patch("main.get_trip_image_storage", return_value=storage), patch("main.get_trip_image_vision") as vision, patch.object(main.database, "SessionLocal", factory):
+            service = main.get_trip_image_service(db)
+        self.assertIsNone(service.vision)
+        vision.assert_not_called()
+
+    def test_testclient_image_access_owner_admin_other_missing_and_expired(self):
+        sentry_sdk = types.ModuleType("sentry_sdk"); sentry_sdk.init = lambda *a, **k: None
+        sys.modules.setdefault("sentry_sdk", sentry_sdk)
+        sys.modules.setdefault("sentry_sdk.integrations", types.ModuleType("sentry_sdk.integrations"))
+        for suffix, class_name in (("logging","LoggingIntegration"),("starlette","StarletteIntegration"),("fastapi","FastApiIntegration")):
+            module = types.ModuleType(f"sentry_sdk.integrations.{suffix}")
+            setattr(module, class_name, type(class_name, (), {"__init__": lambda self,*a,**k: None}))
+            sys.modules.setdefault(f"sentry_sdk.integrations.{suffix}", module)
+        import main, models
+        db, storage, user, request, factory = self.make_confirm_fixture()
+        result = __import__("trip_image_service").TripImageService(db, storage, session_factory=factory).confirm(request, user)
+        other = models.Empleado(id=99, nombre="B", apellido="C", email="b@x", documento="2", fecha_contratacion=date(2020,1,1), activo=True, porcentaje=0)
+        db.add(other); db.commit()
+        main.app.dependency_overrides[main.get_db] = lambda: db
+        main.app.dependency_overrides[main.get_current_user] = lambda: user
+        client = TestClient(main.app)
+        try:
+            with patch("main.get_trip_image_storage", return_value=storage):
+                owner = client.get(f"/api/registro-viaje/imagenes/{result['imagen_id']}")
+                self.assertEqual(owner.content, b"\xff\xd8\xffdata")
+                self.assertEqual(owner.headers["content-type"], "image/jpeg")
+                self.assertEqual(owner.headers["cache-control"], "private, no-store")
+                self.assertIn("ticket.jpg", owner.headers["content-disposition"])
+                main.app.dependency_overrides[main.get_current_user] = lambda: other
+                self.assertEqual(client.get(f"/api/registro-viaje/imagenes/{result['imagen_id']}").status_code, 403)
+                with patch("main.parse_admin_user_ids", return_value={other.id}):
+                    self.assertEqual(client.get(f"/api/registro-viaje/imagenes/{result['imagen_id']}").status_code, 200)
+                main.app.dependency_overrides[main.get_current_user] = lambda: user
+                self.assertEqual(client.get("/api/registro-viaje/imagenes/999").status_code, 404)
+                evidence = db.get(models.ViajeImagen, result["imagen_id"])
+                evidence.expires_at = datetime(2020,1,1); db.commit()
+                self.assertEqual(client.get(f"/api/registro-viaje/imagenes/{result['imagen_id']}").status_code, 410)
+        finally:
+            main.app.dependency_overrides.clear()
