@@ -1,6 +1,6 @@
 ﻿from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Query
+from fastapi import Query, UploadFile, File
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
@@ -26,6 +26,11 @@ from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 import models, schemas, database
 from trip_service import create_trip
+from trip_image_service import TripImageService
+from image_storage import (ImageStorage, ImageStorageError, ImageStorageConfigError,
+                           ImageValidationError, ImageTokenError, ImageStoragePathError)
+from minimax_vision import MiniMaxVisionClient, MiniMaxVisionError, MiniMaxVisionConfigurationError
+from trip_image_normalization import ExtractionValidationError
 from logger import app_logger, log_api_request, log_user_action, log_system_event, sanitize_for_logging, set_request_context, clear_request_context
 # Initialize Sentry as early as possible
 
@@ -633,6 +638,18 @@ def login(request: schemas.LoginRequest, db: Session = Depends(get_db), http_req
     )
     return {"access_token": access_token, "token_type": "bearer", "user": {"nombre": empleado.nombre, "apellido": empleado.apellido, "id": empleado.id}}
 
+def get_trip_image_storage():
+    return ImageStorage()
+
+
+def get_trip_image_vision():
+    return MiniMaxVisionClient()
+
+
+def get_trip_image_service(db: Session):
+    return TripImageService(db, get_trip_image_storage(), get_trip_image_vision())
+
+
 @api_router.post("/registro-viaje", response_model=schemas.RegistroViajeResponse)
 def create_registro_viaje(
     registro: schemas.RegistroViajeCreate,
@@ -646,6 +663,60 @@ def create_registro_viaje(
         return {"id": nuevo_registro.id, "message": "Viaje registrado OK"}
     finally:
         clear_request_context()
+
+
+@api_router.post("/registro-viaje/imagen/analizar", response_model=schemas.TripImageAnalysisResponse)
+async def analyze_trip_image(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: models.Empleado = Depends(get_current_user)):
+    try:
+        storage = get_trip_image_storage()
+        data = await file.read(storage.max_bytes + 1)
+        return TripImageService(db, storage, get_trip_image_vision()).analyze(data, file.filename or "image", file.content_type or "")
+    except ImageStorageConfigError:
+        raise HTTPException(400, "Configuracion de imagen invalida")
+    except (ImageValidationError, ImageStoragePathError) as exc:
+        raise HTTPException(400, str(exc))
+    except ExtractionValidationError as exc:
+        raise HTTPException(422, str(exc))
+    except MiniMaxVisionConfigurationError:
+        raise HTTPException(502, "Servicio de analisis no configurado")
+    except MiniMaxVisionError as exc:
+        raise HTTPException(504 if "tiempo limite" in str(exc).lower() else 502, "No se pudo analizar la imagen")
+    finally:
+        clear_request_context()
+
+
+@api_router.post("/registro-viaje/imagen/confirmar", response_model=schemas.TripImageConfirmResponse)
+def confirm_trip_image(request: schemas.TripImageConfirmRequest, db: Session = Depends(get_db), current_user: models.Empleado = Depends(get_current_user)):
+    try:
+        return get_trip_image_service(db).confirm(request, current_user)
+    except ImageTokenError as exc:
+        expired = "expired" in str(exc).lower()
+        raise HTTPException(410 if expired else 400, "Token de imagen vencido" if expired else "Token de imagen invalido")
+    except ImageStorageConfigError:
+        raise HTTPException(400, "Configuracion de imagen invalida")
+    except (ImageValidationError, ImageStoragePathError):
+        raise HTTPException(400, "La imagen temporal no esta disponible")
+    finally:
+        clear_request_context()
+
+
+@api_router.get("/registro-viaje/imagenes/{image_id}")
+def get_trip_image(image_id: int, db: Session = Depends(get_db), current_user: models.Empleado = Depends(get_current_user)):
+    image = db.query(models.ViajeImagen).filter(models.ViajeImagen.id == image_id).first()
+    if not image:
+        raise HTTPException(404, "Imagen no encontrada")
+    if image.viaje.empleado_id != current_user.id and current_user.id not in parse_admin_user_ids():
+        raise HTTPException(403, "No autorizado")
+    expires = image.expires_at.replace(tzinfo=timezone.utc) if image.expires_at.tzinfo is None else image.expires_at
+    if datetime.now(timezone.utc) >= expires:
+        raise HTTPException(410, "Imagen vencida")
+    try:
+        path = get_trip_image_storage().resolve_confirmed(image.storage_path)
+    except (ImageStorageError, OSError):
+        raise HTTPException(404, "Imagen no disponible")
+    response = FileResponse(path, media_type=image.mime_type, filename=image.original_name)
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @api_router.post("/movimiento-combustible", response_model=schemas.MovimientoCombustibleResponse)

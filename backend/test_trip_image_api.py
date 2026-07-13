@@ -1,10 +1,11 @@
 import sys
 import types
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
+import tempfile
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -362,3 +363,41 @@ class CreateTripServiceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TripImageEndpointServiceTest(unittest.TestCase):
+    def test_analysis_saves_bounded_image_normalizes_and_matches_unique_provider(self):
+        from image_storage import ImageStorage
+        from trip_image_service import TripImageService
+        import models
+
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        storage = ImageStorage(Path(root.name).resolve(), "x" * 32)
+        vision_data = {
+            "fecha_remision": "2026-07-13", "remito_tipo": "002",
+            "remito_sucursal": "003", "remito_numero": "0003677",
+            "proveedor_candidato": "Alcogreen S.A.", "peso_bruto": 49690,
+            "tara": 17080, "neto": 32610, "unidad_peso": "kg",
+            "patente_observada": "ABC123", "chofer_observado": "Otro",
+            "confidence": {"fecha_remision": .9}, "warnings": ["revisar"],
+        }
+        vision = type("Vision", (), {"analyze": lambda self, path: vision_data})()
+        engine = create_engine("sqlite:///:memory:")
+        models.Proveedor.__table__.create(engine)
+        db = sessionmaker(bind=engine)()
+        db.add(models.Proveedor(id=7, razon_social="ALCOGREEN SRL", activo=True)); db.commit()
+        result = TripImageService(db, storage, vision).analyze(
+            b"\xff\xd8\xffdata", "ticket.jpg", "image/jpeg"
+        )
+        self.assertEqual(result["proposal"]["proveedor_id"], 7)
+        self.assertEqual(result["proposal"]["numero_remision_fpv"], "002-003-0003677")
+        self.assertEqual(result["proposal"]["neto_destino"], Decimal("32.610"))
+        self.assertEqual(result["proposal"]["patente_observada"], "ABC123")
+
+    def test_confirm_schema_does_not_accept_identity_fields(self):
+        from schemas import TripImageConfirmRequest
+        fields = set(TripImageConfirmRequest.model_fields)
+        self.assertNotIn("chofer_id", fields)
+        self.assertNotIn("cliente_id", fields)
+        self.assertNotIn("pesaje_unico", fields)
