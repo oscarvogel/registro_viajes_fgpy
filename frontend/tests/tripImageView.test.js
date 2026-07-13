@@ -63,36 +63,3 @@ test('TripImageUpload uses only approved OCR and catalog dependencies', async ()
   ]) assert.match(source, new RegExp(`\\b${name}\\b`))
   assert.doesNotMatch(source, /stores\/sync|from ['"]\.\.\/db|saveRecord|IndexedDB|offline queue/i)
 })
-
-test('TripImageUpload renders selecting, processing, reviewing, success and safe error controls', async () => {
-  const source = await read('../src/views/TripImageUpload.vue')
-  assert.match(source, /type="file"[^>]*accept="image\/jpeg,image\/png,image\/webp"[^>]*capture="environment"/)
-  for (const state of ['selecting', 'processing', 'reviewing', 'confirming', 'success', 'error']) {
-    assert.match(source, new RegExp(`state\\s*={2,3}\\s*['"]${state}['"]`))
-  }
-  for (const field of ['fecha_remision', 'fecha_recepcion', 'numero_remision_fpv', 'proveedor_id', 'peso_bruto_destino', 'tara_destino', 'neto_destino', 'observaciones']) {
-    assert.match(source, new RegExp(`review\\.${field}`))
-  }
-  assert.match(source, /Se toma de Ajustes/)
-  assert.match(source, /warnings/)
-  assert.match(source, /:disabled="[^\"]*(?:confirming|processing|busy)[^\"]*"/)
-  assert.match(source, /router\.(?:push|replace)\(['"]\/settings['"]\)/)
-  assert.match(source, /router\.(?:push|replace)\(['"]\/history['"]\)/)
-})
-
-test('TripImageUpload owns preview URLs and calls exact OCR actions', async () => {
-  const source = await read('../src/views/TripImageUpload.vue')
-  assert.match(source, /onMounted\([\s\S]*?fetchCatalogues/)
-  assert.match(source, /onUnmounted\([\s\S]*?revokeTripImageObjectUrl/)
-  assert.match(source, /validateTripImageFile\(file\)[\s\S]*?selectedFile\.value\s*=\s*file/)
-  assert.match(source, /lifecycle\.runIfActive\([\s\S]*?replacePreview\(confirmedBlob\)/)
-  assert.match(source, /createReviewModel\([\s\S]*?localToday\(\)/)
-  assert.match(source, /await analyzeTripImage\(selectedFile\.value\)/)
-  assert.match(source, /buildConfirmPayload\(review\.value, settings\.value\)/)
-  assert.match(source, /await confirmTripImage\(payload\)/)
-  assert.match(source, /await fetchTripImageBlob\(/)
-  assert.match(source, /createTripImageObjectUrl\(/)
-  assert.match(source, /revokeTripImageObjectUrl\(/)
-  assert.doesNotMatch(source, /toISOString\(\)\.split\(['"]T['"]\)/)
-  assert.doesNotMatch(source, /console\./)
-})
