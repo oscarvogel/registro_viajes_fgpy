@@ -69,22 +69,30 @@ test('mapTripImageError returns safe Spanish actions without reflecting backend 
 
 const storage = (values) => ({ getItem: (key) => values[key] ?? null })
 const catalog = {
-  empleados: [{ id: 7, nombre: 'Ana', activo: true }],
-  equipos: [{ id: 2, patente: 'AB 123 CD', activo: true }],
-  unidadesNegocio: [{ id: 4, nombre: 'Forestal', activo: true }],
+  empleados: [{ id: 7, nombre: ' Ana ', apellido: ' Pérez ', activo: true, meta: { secret: 'user' } }],
+  equipos: [{ id: 2, patente: 'AB 123 CD', descripcion: ' Camión ', activo: true, meta: { secret: 'truck' } }],
+  unidadesNegocio: [{ id: 4, descripcion: ' Forestal ', prefijo: ' F ', activo: true, meta: { secret: 'unit' } }],
   proveedores: [{ id: 8, nombre: 'Proveedor', activo: true }, { id: 9, nombre: 'Inactivo', activo: false }],
 }
 
 test('readTripImageSettings parses storage, normalizes config and matches active catalogs', () => {
   const result = readTripImageSettings({ storage: storage({ user: '{"id":7}', default_patente: ' ab 123 cd ', default_unidad_negocio: '4' }), catalog })
   assert.deepEqual(result, {
-    userId: 7, user: catalog.empleados[0], patente: 'AB 123 CD', equipoId: 2, equipo: catalog.equipos[0],
-    unidadNegocioId: 4, unidadNegocio: catalog.unidadesNegocio[0], activeProviderIds: [8],
+    userId: 7, user: { id: 7, nombre: 'Ana', apellido: 'Pérez', activo: true },
+    patente: 'AB 123 CD', equipoId: 2,
+    equipo: { id: 2, patente: 'AB 123 CD', descripcion: 'Camión', activo: true },
+    unidadNegocioId: 4,
+    unidadNegocio: { id: 4, descripcion: 'Forestal', prefijo: 'F', activo: true }, activeProviderIds: [8],
     missing: [], errors: [], complete: true,
   })
   assert.ok(Object.isFrozen(result))
   assert.ok(Object.isFrozen(result.user) && Object.isFrozen(result.equipo) && Object.isFrozen(result.unidadNegocio))
   assert.ok(Object.isFrozen(result.activeProviderIds) && Object.isFrozen(result.missing) && Object.isFrozen(result.errors))
+  assert.equal('meta' in result.user, false)
+  assert.equal('meta' in result.equipo, false)
+  assert.equal('meta' in result.unidadNegocio, false)
+  assert.equal(catalog.empleados[0].nombre, ' Ana ')
+  assert.equal(catalog.empleados[0].meta.secret, 'user')
 })
 
 test('readTripImageSettings safely reports corrupt, missing or inactive settings', () => {
@@ -111,6 +119,11 @@ test('createReviewModel keeps editable OCR data, current config and mismatch war
   assert.equal(review.config.patente, 'AB 123 CD')
   assert.ok(Object.isFrozen(review.config))
   assert.ok(Object.isFrozen(review.config.user) && Object.isFrozen(review.config.unidadNegocio))
+  assert.equal('meta' in review.config.user, false)
+  assert.equal('meta' in review.config.equipo, false)
+  assert.equal('meta' in review.config.unidadNegocio, false)
+  assert.throws(() => { review.config.user.nombre = 'Mutado' }, TypeError)
+  assert.equal(catalog.empleados[0].nombre, ' Ana ')
   assert.equal(review.observed.patente, 'ZZ999ZZ')
   assert.ok(review.warnings.some((warning) => /patente/i.test(warning)))
   assert.ok(review.warnings.some((warning) => /chofer/i.test(warning)))

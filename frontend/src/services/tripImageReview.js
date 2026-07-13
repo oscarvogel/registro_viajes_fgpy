@@ -4,9 +4,27 @@ const positiveInteger = (value) => {
 }
 
 const normalizedText = (value) => String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+const scalarText = (value) => String(value ?? '').trim()
 const active = (item) => item && item.activo !== false && item.active !== false
 const list = (value) => Array.isArray(value) ? value : []
-const frozenCopy = (value) => value ? Object.freeze({ ...value }) : null
+const userSnapshot = (value) => value ? Object.freeze({
+  id: positiveInteger(value.id),
+  nombre: scalarText(value.nombre),
+  apellido: scalarText(value.apellido),
+  activo: true,
+}) : null
+const equipmentSnapshot = (value) => value ? Object.freeze({
+  id: positiveInteger(value.id),
+  patente: scalarText(value.patente).toUpperCase(),
+  descripcion: scalarText(value.descripcion),
+  activo: true,
+}) : null
+const unitSnapshot = (value) => value ? Object.freeze({
+  id: positiveInteger(value.id),
+  descripcion: scalarText(value.descripcion),
+  prefijo: scalarText(value.prefijo),
+  activo: true,
+}) : null
 
 export const readTripImageSettings = ({ storage, catalog = {} }) => {
   const errors = []
@@ -21,9 +39,9 @@ export const readTripImageSettings = ({ storage, catalog = {} }) => {
   const unidadNegocioId = positiveInteger(storage?.getItem('default_unidad_negocio'))
   if (!unidadNegocioId && storage?.getItem('default_unidad_negocio')) errors.push('La unidad de negocio guardada no es válida.')
 
-  const user = frozenCopy(list(catalog.empleados).find((item) => active(item) && positiveInteger(item.id) === userId))
-  const equipo = frozenCopy(list(catalog.equipos).find((item) => active(item) && normalizedText(item.patente) === normalizedText(patente)))
-  const unidadNegocio = frozenCopy(list(catalog.unidadesNegocio).find((item) => active(item) && positiveInteger(item.id) === unidadNegocioId))
+  const user = userSnapshot(list(catalog.empleados).find((item) => active(item) && positiveInteger(item.id) === userId))
+  const equipo = equipmentSnapshot(list(catalog.equipos).find((item) => active(item) && normalizedText(item.patente) === normalizedText(patente)))
+  const unidadNegocio = unitSnapshot(list(catalog.unidadesNegocio).find((item) => active(item) && positiveInteger(item.id) === unidadNegocioId))
   const activeProviderIds = Object.freeze(list(catalog.proveedores)
     .filter(active)
     .map((item) => positiveInteger(item.id))
@@ -74,10 +92,10 @@ export const createReviewModel = (analysis, settings, today) => {
     warnings.push('El chofer observado no coincide con el usuario actual.')
   }
   const config = Object.freeze({
-    user: frozenCopy(settings?.user),
+    user: userSnapshot(settings?.user),
     patente: settings?.patente || '',
-    equipo: frozenCopy(settings?.equipo),
-    unidadNegocio: frozenCopy(settings?.unidadNegocio),
+    equipo: equipmentSnapshot(settings?.equipo),
+    unidadNegocio: unitSnapshot(settings?.unidadNegocio),
   })
   return {
     upload_token: analysis?.upload_token,
@@ -119,12 +137,12 @@ export const buildConfirmPayload = (review, settings) => {
   const validConfig = userId
     && equipoId
     && unidadId
-    && active(settings?.user)
+    && settings?.user?.activo === true
     && positiveInteger(settings.user.id) === userId
-    && active(settings?.equipo)
+    && settings?.equipo?.activo === true
     && positiveInteger(settings.equipo.id) === equipoId
     && normalizedText(settings.equipo.patente) === normalizedText(settings.patente)
-    && active(settings?.unidadNegocio)
+    && settings?.unidadNegocio?.activo === true
     && positiveInteger(settings.unidadNegocio.id) === unidadId
   if (!validConfig) {
     throw new TypeError('La configuración del viaje está incompleta.')
