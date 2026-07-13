@@ -113,16 +113,30 @@ class _SubprocessExecutor:
                     return response
             return response
         finally:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=2)
-            for handle in (proc.stdin, proc.stdout, proc.stderr):
-                if handle:
-                    handle.close()
+            try:
+                if proc.poll() is None:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        proc.wait(timeout=2)
+                    except Exception:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        try:
+                            proc.wait(timeout=2)
+                        except Exception:
+                            pass
+            finally:
+                for handle in (proc.stdin, proc.stdout, proc.stderr):
+                    if handle:
+                        try:
+                            handle.close()
+                        except Exception:
+                            pass
 
     @staticmethod
     def _send(proc, message):
@@ -177,6 +191,8 @@ def _parse_response(response: Any) -> dict[str, Any]:
         if not isinstance(response, dict) or "error" in response:
             raise ValueError
         content = response["result"]["content"]
+        if not isinstance(content, list) or not all(isinstance(item, dict) for item in content):
+            raise TypeError
         texts = [item["text"] for item in content if item.get("type") == "text" and isinstance(item.get("text"), str)]
         if len(texts) != 1:
             raise ValueError

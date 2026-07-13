@@ -4,6 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+import subprocess
 
 from backend.minimax_vision import (
     MiniMaxVisionClient,
@@ -104,6 +105,16 @@ class MiniMaxVisionClientTests(unittest.TestCase):
                 self.assertNotIn("top-secret", str(caught.exception))
                 self.assertNotIn("not json", str(caught.exception))
 
+    def test_malformed_content_entries_are_sanitized_errors(self):
+        for entry in (1, "top-secret", None, [], ["top-secret"]):
+            with self.subTest(entry=entry):
+                response = {"result": {"content": [entry]}}
+                with self.assertRaises(MiniMaxVisionError) as caught:
+                    self.client(FakeExecutor(response)).analyze(self.image)
+                self.assertNotIsInstance(caught.exception, AttributeError)
+                self.assertNotIn("top-secret", str(caught.exception))
+                self.assertNotIn("top-secret", repr(caught.exception.__cause__))
+
     def test_executor_failures_are_explicit_and_sanitized(self):
         for error in (TimeoutError("top-secret timeout"), OverflowError("top-secret oversized")):
             with self.subTest(error=type(error).__name__):
@@ -137,6 +148,50 @@ class MiniMaxVisionClientTests(unittest.TestCase):
             self.client(executor).analyze(self.image)
         self.assertEqual(executor.calls[0]["timeout_seconds"], 12)
         self.assertEqual(executor.calls[0]["max_output_bytes"], 2048)
+
+    def test_timeout_closes_all_process_streams_when_both_waits_fail(self):
+        class Stream:
+            def __init__(self):
+                self.closed = False
+
+            def write(self, value):
+                return len(value)
+
+            def flush(self):
+                pass
+
+            def close(self):
+                self.closed = True
+
+            def __iter__(self):
+                return iter(())
+
+        class Process:
+            def __init__(self):
+                self.stdin, self.stdout, self.stderr = Stream(), Stream(), Stream()
+                self.wait_count = 0
+
+            def poll(self):
+                return None
+
+            def terminate(self):
+                pass
+
+            def kill(self):
+                pass
+
+            def wait(self, timeout):
+                self.wait_count += 1
+                raise subprocess.TimeoutExpired("top-secret", timeout)
+
+        process = Process()
+        with patch("backend.minimax_vision.subprocess.Popen", return_value=process):
+            with self.assertRaises(MiniMaxVisionError) as caught:
+                MiniMaxVisionClient(api_key="top-secret", timeout_seconds=1e-9).analyze(self.image)
+        self.assertIn("tiempo limite", str(caught.exception))
+        self.assertNotIn("top-secret", str(caught.exception))
+        self.assertEqual(process.wait_count, 2)
+        self.assertTrue(all(stream.closed for stream in (process.stdin, process.stdout, process.stderr)))
 
 
 if __name__ == "__main__":
