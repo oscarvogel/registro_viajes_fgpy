@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 import tempfile
+import asyncio
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -450,6 +451,11 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         self.assertIsNone(trip.cliente_id)
         self.assertEqual(trip.neto_origen, Decimal("0.00"))
         self.assertEqual(db.query(models.ViajeImagen).count(), 1)
+        other = models.Empleado(id=99, nombre="B", apellido="C", email="b@x", documento="2", fecha_contratacion=date(2020,1,1), activo=True, porcentaje=0)
+        db.add(other); db.commit()
+        with self.assertRaises(HTTPException) as denied:
+            service.confirm(request, other)
+        self.assertEqual(denied.exception.status_code, 403)
 
     def test_commit_failure_compensates_and_retry_succeeds(self):
         from trip_image_service import TripImageService
@@ -504,3 +510,27 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         with self.assertRaises(HTTPException) as missing:
             main.get_trip_image(999, db, user)
         self.assertEqual(missing.exception.status_code, 404)
+
+        evidence = db.get(models.ViajeImagen, result["imagen_id"])
+        evidence.expires_at = datetime(2020, 1, 1); db.commit()
+        with self.assertRaises(HTTPException) as expired:
+            main.get_trip_image(result["imagen_id"], db, user)
+        self.assertEqual(expired.exception.status_code, 410)
+
+    def test_analyze_reads_only_max_plus_one(self):
+        import main
+        from image_storage import ImageStorage
+        root = tempfile.TemporaryDirectory(); self.addCleanup(root.cleanup)
+        storage = ImageStorage(Path(root.name).resolve(), "x" * 32, max_bytes=5)
+        class Upload:
+            filename = "x.jpg"; content_type = "image/jpeg"
+            requested = None
+            async def read(self, size):
+                self.requested = size
+                return b"\xff\xd8\xff123"
+        upload = Upload()
+        with patch("main.get_trip_image_storage", return_value=storage):
+            with self.assertRaises(HTTPException) as too_large:
+                asyncio.run(main.analyze_trip_image(upload, object(), object()))
+        self.assertEqual(upload.requested, 6)
+        self.assertEqual(too_large.exception.status_code, 400)
