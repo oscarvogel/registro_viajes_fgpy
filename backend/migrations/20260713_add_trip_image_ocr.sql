@@ -9,8 +9,9 @@ BEGIN
     DECLARE cliente_column_type TEXT;
     DECLARE cliente_is_nullable VARCHAR(3);
     DECLARE fk_exists INT DEFAULT 0;
-    DECLARE expires_index_exists INT DEFAULT 0;
-    DECLARE token_index_exists INT DEFAULT 0;
+    DECLARE named_index_exists INT DEFAULT 0;
+    DECLARE named_index_correct INT DEFAULT 0;
+    DECLARE exact_index_exists INT DEFAULT 0;
 
     IF NOT EXISTS (
         SELECT 1
@@ -61,23 +62,66 @@ BEGIN
             FOREIGN KEY (viaje_id) REFERENCES tablero_produccion (id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-    SELECT COUNT(*) INTO expires_index_exists
-      FROM information_schema.STATISTICS
-     WHERE TABLE_SCHEMA = DATABASE()
-       AND TABLE_NAME = 'viaje_imagenes'
-       AND COLUMN_NAME = 'expires_at';
-    IF expires_index_exists = 0 THEN
+    SELECT COUNT(*), COALESCE(MAX(index_columns = 'expires_at' AND non_unique = 1), 0)
+      INTO named_index_exists, named_index_correct
+      FROM (
+          SELECT INDEX_NAME, NON_UNIQUE AS non_unique,
+                 GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS index_columns
+            FROM information_schema.STATISTICS
+           WHERE TABLE_SCHEMA = DATABASE()
+             AND TABLE_NAME = 'viaje_imagenes'
+           GROUP BY INDEX_NAME, NON_UNIQUE
+      ) AS index_definitions
+     WHERE INDEX_NAME = 'ix_viaje_imagenes_expires_at';
+    IF named_index_exists > 0 AND named_index_correct = 0 THEN
+        ALTER TABLE viaje_imagenes
+            DROP INDEX ix_viaje_imagenes_expires_at;
+    END IF;
+
+    SELECT COUNT(*) INTO exact_index_exists
+      FROM (
+          SELECT NON_UNIQUE,
+                 GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS index_columns
+            FROM information_schema.STATISTICS
+           WHERE TABLE_SCHEMA = DATABASE()
+             AND TABLE_NAME = 'viaje_imagenes'
+           GROUP BY INDEX_NAME, NON_UNIQUE
+      ) AS index_definitions
+     WHERE index_columns = 'expires_at'
+       AND NON_UNIQUE = 1;
+    IF exact_index_exists = 0 THEN
         ALTER TABLE viaje_imagenes
             ADD INDEX ix_viaje_imagenes_expires_at (expires_at);
     END IF;
 
-    SELECT COUNT(*) INTO token_index_exists
-      FROM information_schema.STATISTICS
-     WHERE TABLE_SCHEMA = DATABASE()
-       AND TABLE_NAME = 'viaje_imagenes'
-       AND COLUMN_NAME = 'token_hash'
+    SELECT COUNT(*), COALESCE(MAX(index_columns = 'token_hash' AND non_unique = 0), 0)
+      INTO named_index_exists, named_index_correct
+      FROM (
+          SELECT INDEX_NAME, NON_UNIQUE AS non_unique,
+                 GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS index_columns
+            FROM information_schema.STATISTICS
+           WHERE TABLE_SCHEMA = DATABASE()
+             AND TABLE_NAME = 'viaje_imagenes'
+           GROUP BY INDEX_NAME, NON_UNIQUE
+      ) AS index_definitions
+     WHERE INDEX_NAME = 'uq_viaje_imagenes_token_hash';
+    IF named_index_exists > 0 AND named_index_correct = 0 THEN
+        ALTER TABLE viaje_imagenes
+            DROP INDEX uq_viaje_imagenes_token_hash;
+    END IF;
+
+    SELECT COUNT(*) INTO exact_index_exists
+      FROM (
+          SELECT NON_UNIQUE,
+                 GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) AS index_columns
+            FROM information_schema.STATISTICS
+           WHERE TABLE_SCHEMA = DATABASE()
+             AND TABLE_NAME = 'viaje_imagenes'
+           GROUP BY INDEX_NAME, NON_UNIQUE
+      ) AS index_definitions
+     WHERE index_columns = 'token_hash'
        AND NON_UNIQUE = 0;
-    IF token_index_exists = 0 THEN
+    IF exact_index_exists = 0 THEN
         ALTER TABLE viaje_imagenes
             ADD UNIQUE INDEX uq_viaje_imagenes_token_hash (token_hash);
     END IF;
