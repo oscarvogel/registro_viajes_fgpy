@@ -146,17 +146,55 @@ El backend crea subdirectorios con permisos restrictivos, pero la cuenta del ser
 Antes de migrar producción, confirmar la base seleccionada, inspeccionar la estructura actual y realizar un backup. El script agrega `pesaje_unico`, permite `cliente_id=NULL` y crea `viaje_imagenes`; no debe ejecutarse a ciegas:
 
 ```bash
-mysqldump --single-transaction --routines --triggers BASE_DATOS tablero_produccion viaje_imagenes > backup-viaje-imagen-$(date +%Y%m%d-%H%M%S).sql
-mysql BASE_DATOS < backend/migrations/20260713_add_trip_image_ocr.sql
-mysql --table BASE_DATOS < backend/migrations/20260713_verify_trip_image_ocr.sql
+umask 077
+export DB_NAME='BASE_DATOS'
+export MYSQL_CNF='/ruta/privada/mysql-client.cnf'
+export BACKUP="$PWD/backup-viaje-imagen-$(date +%Y%m%d-%H%M%S).sql"
+mysql --defaults-extra-file="$MYSQL_CNF" --table "$DB_NAME" -e "SHOW CREATE TABLE tablero_produccion\G; SHOW COLUMNS FROM tablero_produccion LIKE 'cliente_id';"
+mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers --events --databases "$DB_NAME" > "$BACKUP"
+test -s "$BACKUP"
+mysql --defaults-extra-file="$MYSQL_CNF" "$DB_NAME" < backend/migrations/20260713_add_trip_image_ocr.sql
+mysql --defaults-extra-file="$MYSQL_CNF" --table "$DB_NAME" < backend/migrations/20260713_verify_trip_image_ocr.sql
 ```
 
-Si `viaje_imagenes` todavía no existe, omitirla del primer `mysqldump` o respaldar la base completa. La migración es idempotente, pero se detiene si encuentra `token_hash` duplicados. La verificación es de solo lectura y debe mostrar:
+`mysql-client.cnf` debe ser legible solo por la cuenta operativa y contener las credenciales fuera del historial del shell; no usar `-pCLAVE`. Conservar también la salida previa de `SHOW CREATE TABLE`, porque documenta el tipo y nullability originales de `cliente_id`. La migración es idempotente, pero se detiene si encuentra `token_hash` duplicados. La verificación es de solo lectura y debe mostrar:
 
 - `tablero_produccion.pesaje_unico` no nulo con valor por defecto `0`;
 - `tablero_produccion.cliente_id` nullable;
 - tabla InnoDB `viaje_imagenes`, FK hacia `tablero_produccion(id)`;
 - índice no único exacto sobre `expires_at` e índice único exacto sobre `token_hash`.
+
+#### Rollback de aplicación y esquema
+
+El rollback destructivo restaura la base al instante del backup y pierde cualquier escritura posterior. Usarlo únicamente con la aplicación detenida, una ventana aprobada y el archivo validado. Antes de comenzar, guardar además un backup del estado fallido para investigación.
+
+```bash
+sudo systemctl stop SERVICIO_REGISTRO_VIAJES
+
+# Revertir el checkout/symlink o desplegar el artefacto anterior ya verificado.
+# El mecanismo exacto depende del esquema de releases del servidor.
+
+export DB_NAME='BASE_DATOS'
+export MYSQL_CNF='/ruta/privada/mysql-client.cnf'
+export BACKUP='/ruta/privada/backup-viaje-imagen-AAAAMMDD-HHMMSS.sql'
+test -r "$BACKUP" && test -s "$BACKUP"
+mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers --events --databases "$DB_NAME" > "${BACKUP}.estado-fallido"
+
+# La tabla nueva no figura en un backup anterior y debe retirarse antes de restaurar.
+mysql --defaults-extra-file="$MYSQL_CNF" "$DB_NAME" -e "SET FOREIGN_KEY_CHECKS=0; DROP TABLE IF EXISTS viaje_imagenes; SET FOREIGN_KEY_CHECKS=1;"
+mysql --defaults-extra-file="$MYSQL_CNF" < "$BACKUP"
+
+mysql --defaults-extra-file="$MYSQL_CNF" --table "$DB_NAME" -e "
+SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='viaje_imagenes';
+SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tablero_produccion' AND COLUMN_NAME IN ('cliente_id','pesaje_unico') ORDER BY COLUMN_NAME;"
+
+sudo systemctl start SERVICIO_REGISTRO_VIAJES
+curl --fail --silent --show-error http://127.0.0.1:8000/api/admin/health
+```
+
+La verificación debe mostrar que `viaje_imagenes` y `pesaje_unico` ya no existen, y que `cliente_id` volvió exactamente al `COLUMN_TYPE`, `IS_NULLABLE` y default capturados antes de migrar. El `UNIQUE token_hash` y los demás índices de evidencia desaparecen junto con `viaje_imagenes`; no intentar borrarlos después. Nunca eliminar `cliente_id`: la migración solo cambia su nullability.
+
+Si hay que conservar escrituras posteriores al backup, **no** restaurar ni ejecutar el `DROP TABLE`: detener el rollback y preparar con un DBA una migración inversa basada en el `SHOW CREATE TABLE` previo, exportando antes las filas y archivos de evidencia. No es seguro reconstruir el tipo original de `cliente_id` por su nombre ni volverlo `NOT NULL` mientras existan viajes OCR con cliente nulo.
 
 #### Verificación del flujo OCR
 
