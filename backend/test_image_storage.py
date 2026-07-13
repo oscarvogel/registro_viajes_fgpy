@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import hmac
 import json
 import os
 import tempfile
@@ -397,6 +398,53 @@ class ImageStorageTestCase(unittest.TestCase):
         self.assertEqual(scan.promotions, ())
         self.assertEqual(scan.invalid_count, 1)
         self.assertTrue((self.root / confirmed.relative_path).exists())
+
+    def test_enumeration_rejects_correctly_signed_noncanonical_receipts(self):
+        saved = self.storage.save_temp(JPEG, "orphan.jpg", "image/jpeg")
+        self.storage.promote(saved.token, NOW)
+        receipt = self.root / "receipts" / f"{Path(saved.relative_path).stem}.json"
+        payload = self.storage._decode_signed(receipt.read_text(encoding="ascii"))
+        canonical = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        variants = (
+            json.dumps(payload, indent=1).encode("utf-8"),
+            (canonical[:-1] + b',"kind":"promotion-receipt"}'),
+        )
+        for body in variants:
+            with self.subTest(body=body[:20]):
+                signature = hmac.new(SECRET.encode(), body, hashlib.sha256).digest()
+                receipt.write_text(f"{self.storage._encode(body)}.{self.storage._encode(signature)}", encoding="ascii")
+                scan = self.storage.enumerate_promotions()
+                self.assertEqual(scan.promotions, ())
+                self.assertEqual(scan.invalid_count, 1)
+
+    def test_orphan_delete_recovers_when_file_was_deleted_but_receipt_unlink_failed(self):
+        saved = self.storage.save_temp(JPEG, "orphan.jpg", "image/jpeg")
+        confirmed = self.storage.promote(saved.token, NOW)
+        promotion = self.storage.enumerate_promotions().promotions[0]
+        receipt = self.root / "receipts" / f"{Path(saved.relative_path).stem}.json"
+        original_unlink = Path.unlink
+
+        def fail_receipt(path, *args, **kwargs):
+            if Path(path) == receipt:
+                raise PermissionError("private path")
+            return original_unlink(path, *args, **kwargs)
+
+        with patch("backend.image_storage.Path.unlink", autospec=True, side_effect=fail_receipt):
+            with self.assertRaises(ImageStoragePathError):
+                self.storage.delete_orphaned_promotion(promotion)
+        self.assertFalse((self.root / confirmed.relative_path).exists())
+        retry_scan = self.storage.enumerate_promotions()
+        self.assertEqual(len(retry_scan.promotions), 1)
+        self.assertFalse(retry_scan.promotions[0].file_present)
+        self.assertTrue(self.storage.delete_orphaned_promotion(retry_scan.promotions[0]))
+        self.assertFalse(receipt.exists())
+
+    def test_cleanup_lock_is_exclusive_across_storage_instances(self):
+        other = ImageStorage(root=self.root, token_secret=SECRET, now=lambda: NOW, lock_timeout_seconds=0.02)
+        with self.storage.cleanup_lock():
+            with self.assertRaises(ImageStoragePathError):
+                with other.cleanup_lock():
+                    self.fail("second cleanup lock unexpectedly acquired")
 
     def test_cleanup_continues_past_malformed_tampered_and_naive_metadata(self):
         expired = self.storage.save_temp(JPEG, "expired.jpg", "image/jpeg")

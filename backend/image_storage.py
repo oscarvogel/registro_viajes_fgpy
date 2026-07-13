@@ -94,6 +94,7 @@ class PromotionMetadata:
     expires_at: datetime
     sha256: str
     detected_mime: str
+    file_present: bool
     _upload_id: str
     _signed_receipt: str
 
@@ -336,12 +337,22 @@ class ImageStorage:
             expected = hmac.new(self._secret, body, hashlib.sha256).digest()
             if not hmac.compare_digest(signature, expected):
                 raise ValueError("Invalid signature")
-            payload = json.loads(body.decode("utf-8"))
+            def reject_duplicate_keys(pairs):
+                payload = {}
+                for key, value in pairs:
+                    if key in payload:
+                        raise ValueError("Duplicate signed payload key")
+                    payload[key] = value
+                return payload
+
+            payload = json.loads(body.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
             if not isinstance(payload, dict):
                 raise ValueError("Invalid signed payload")
             canonical_body = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
             if not hmac.compare_digest(body, canonical_body):
                 raise ValueError("Non-canonical signed payload")
+            if not hmac.compare_digest(signed_value, self._sign_payload(payload)):
+                raise ValueError("Non-canonical signed value")
             return payload
         except (ValueError, TypeError, json.JSONDecodeError, UnicodeError) as exc:
             raise ImageTokenError("Invalid signed image data") from exc
@@ -533,6 +544,43 @@ class ImageStorage:
                     pass
                 handle.close()
 
+    @contextmanager
+    def cleanup_lock(self):
+        """Serialize cleanup across processes sharing this storage root."""
+        lock_path = self._safe_path("locks/cleanup.lock", required_prefix="locks")
+        handle = None
+        try:
+            lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self._assert_no_symlink_components(lock_path.parent, "locks")
+            handle = open(lock_path, "a+b")
+            if handle.seek(0, os.SEEK_END) == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            deadline = time.monotonic() + self.lock_timeout_seconds
+            while not self._try_acquire_lock(handle):
+                if time.monotonic() >= deadline:
+                    raise ImageStoragePathError("Image cleanup lock is unavailable")
+                time.sleep(min(0.01, self.lock_timeout_seconds))
+            yield
+        except ImageStorageError:
+            raise
+        except OSError as exc:
+            raise ImageStoragePathError("Image cleanup lock failed") from exc
+        finally:
+            if handle is not None:
+                try:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        import msvcrt
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                handle.close()
+
     @staticmethod
     def _try_acquire_lock(handle) -> bool:
         try:
@@ -599,7 +647,7 @@ class ImageStorage:
         except (ImageStorageError, OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise ImageValidationError("Invalid promotion receipt") from exc
 
-    def _parse_promotion_receipt(self, receipt_path: Path, signed_receipt: str) -> PromotionMetadata:
+    def _parse_promotion_receipt(self, receipt_path: Path, signed_receipt: str, *, require_file: bool = True) -> PromotionMetadata:
         try:
             receipt = self._decode_signed(signed_receipt)
             expected_keys = {
@@ -636,12 +684,16 @@ class ImageStorage:
             if receipt["relative_path"] != expected_relative:
                 raise ImageValidationError("Invalid promotion receipt")
             image_path = self._safe_path(expected_relative, required_prefix="confirmed")
-            self._validate_confirmed_file(image_path, receipt["source_sha256"], mime)
-            if image_path.stat().st_size != receipt["source_size"]:
+            file_present = image_path.is_file()
+            if file_present:
+                self._validate_confirmed_file(image_path, receipt["source_sha256"], mime)
+                if image_path.stat().st_size != receipt["source_size"]:
+                    raise ImageValidationError("Invalid promotion receipt")
+            elif require_file:
                 raise ImageValidationError("Invalid promotion receipt")
             return PromotionMetadata(
                 receipt["token_hash"], expected_relative, confirmed_at, expires_at,
-                receipt["source_sha256"], mime, upload_id, signed_receipt,
+                receipt["source_sha256"], mime, file_present, upload_id, signed_receipt,
             )
         except ImageValidationError:
             raise
@@ -660,7 +712,7 @@ class ImageStorage:
                     raise ImageValidationError("Invalid promotion receipt")
                 self._assert_no_symlink_components(receipt_path, "receipts")
                 signed = receipt_path.read_text(encoding="ascii")
-                promotions.append(self._parse_promotion_receipt(receipt_path.resolve(), signed))
+                promotions.append(self._parse_promotion_receipt(receipt_path.resolve(), signed, require_file=False))
             except (ImageStorageError, OSError, UnicodeError):
                 invalid += 1
         return PromotionScan(tuple(promotions), invalid)
@@ -678,8 +730,15 @@ class ImageStorage:
                 raise ImageStoragePathError("Promotion receipt cannot be read") from exc
             if not hmac.compare_digest(signed, promotion._signed_receipt):
                 return False
-            current = self._parse_promotion_receipt(receipt_path.resolve(), signed)
-            if current != promotion:
+            current = self._parse_promotion_receipt(receipt_path.resolve(), signed, require_file=False)
+            if (
+                current.token_hash != promotion.token_hash
+                or current.relative_path != promotion.relative_path
+                or current.confirmed_at != promotion.confirmed_at
+                or current.expires_at != promotion.expires_at
+                or current.sha256 != promotion.sha256
+                or current.detected_mime != promotion.detected_mime
+            ):
                 return False
             image_path = self._safe_path(promotion.relative_path, required_prefix="confirmed")
             try:

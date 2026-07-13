@@ -10,6 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 import models
 from image_storage import ImageStorage
+from image_storage import ImageStoragePathError
 from trip_image_cleanup import cleanup_trip_images
 
 
@@ -90,6 +91,46 @@ class TripImageCleanupTests(unittest.TestCase):
     def test_requires_aware_utc_now(self):
         with self.assertRaises(ValueError):
             cleanup_trip_images(self.Session(), self.storage, NOW.replace(tzinfo=None))
+
+    def test_cleanup_lock_timeout_is_safe_and_deletes_nothing(self):
+        db = self.Session(); row, confirmed = self.add_evidence(db)
+        other = ImageStorage(root=self.root, token_secret=SECRET, now=lambda: NOW, lock_timeout_seconds=0.02)
+        with self.storage.cleanup_lock():
+            result = cleanup_trip_images(db, other, NOW)
+        self.assertEqual(result.errors, ("cleanup_lock",))
+        self.assertEqual(result.expired_deleted, 0)
+        self.assertIsNotNone(db.get(models.ViajeImagen, row.id))
+        self.assertTrue((self.root / confirmed.relative_path).exists())
+
+    def test_candidate_mutated_before_locked_reselect_does_not_delete_old_file(self):
+        candidate_query = Mock()
+        candidate_query.filter.return_value.all.return_value = [(7,)]
+        locked_query = Mock()
+        locked_query.filter.return_value.with_for_update.return_value.one_or_none.return_value = None
+        db = Mock()
+        db.query.side_effect = [candidate_query, locked_query]
+        storage = Mock()
+        storage.cleanup_lock.return_value.__enter__ = Mock(return_value=None)
+        storage.cleanup_lock.return_value.__exit__ = Mock(return_value=False)
+        storage.cleanup_expired_temps.return_value = 0
+        storage.enumerate_promotions.return_value = Mock(promotions=(), invalid_count=0)
+        result = cleanup_trip_images(db, storage, NOW)
+        storage.delete_confirmed.assert_not_called()
+        self.assertEqual(result.expired_deleted, 0)
+
+    def test_orphan_is_retained_when_evidence_appears_before_locked_recheck(self):
+        promoted = self.storage.promote(
+            self.storage.save_temp(JPEG, "old.jpg", "image/jpeg").token,
+            NOW - timedelta(days=2),
+        )
+        candidate_query = Mock()
+        candidate_query.filter.return_value.all.return_value = []
+        orphan_query = Mock()
+        orphan_query.filter.return_value.with_for_update.return_value.first.return_value = (42,)
+        db = Mock(); db.query.side_effect = [candidate_query, orphan_query]
+        result = cleanup_trip_images(db, self.storage, NOW)
+        self.assertEqual(result.orphan_deleted, 0)
+        self.assertTrue((self.root / promoted.relative_path).exists())
 
 
 class SchedulerCleanupTests(unittest.TestCase):
