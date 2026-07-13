@@ -58,14 +58,14 @@ class TripImageCleanupTests(unittest.TestCase):
     def test_storage_failure_retains_metadata_and_continues(self):
         db = self.Session(); first, _ = self.add_evidence(db); second, _ = self.add_evidence(db)
         first_id, second_id = first.id, second.id
-        real_delete = self.storage.delete_confirmed
-        self.storage.delete_confirmed = Mock(side_effect=[OSError("secret path"), None])
+        real_delete = self.storage.delete_confirmed_promotion
+        self.storage.delete_confirmed_promotion = Mock(side_effect=[OSError("secret path"), None])
         result = cleanup_trip_images(db, self.storage, NOW)
         self.assertEqual(result.expired_deleted, 1)
         self.assertEqual(result.errors, ("expired_storage_delete",))
         self.assertIsNotNone(db.get(models.ViajeImagen, first_id))
         self.assertIsNone(db.get(models.ViajeImagen, second_id))
-        self.storage.delete_confirmed = real_delete
+        self.storage.delete_confirmed_promotion = real_delete
 
     def test_stale_expired_row_path_never_deletes_another_promotion(self):
         db = self.Session()
@@ -90,6 +90,15 @@ class TripImageCleanupTests(unittest.TestCase):
         db.commit()
         result = cleanup_trip_images(db, self.storage, NOW)
         self.assertIn("expired_metadata_mismatch", result.errors)
+        self.assertIsNotNone(db.get(models.ViajeImagen, row.id))
+        self.assertTrue((self.root / confirmed.relative_path).exists())
+
+    def test_tampered_expired_candidate_is_retained(self):
+        db = self.Session()
+        row, confirmed = self.add_evidence(db)
+        (self.root / confirmed.relative_path).write_bytes(JPEG + b"tampered")
+        result = cleanup_trip_images(db, self.storage, NOW)
+        self.assertIn("expired_storage_delete", result.errors)
         self.assertIsNotNone(db.get(models.ViajeImagen, row.id))
         self.assertTrue((self.root / confirmed.relative_path).exists())
 
@@ -177,9 +186,36 @@ class TripImageCleanupTests(unittest.TestCase):
         db = Mock(); db.query.side_effect = [candidate_query, orphan_query]
         db.get_bind.return_value.dialect.name = "mysql"
         db.connection.return_value.get_isolation_level.return_value = "REPEATABLE READ"
-        result = cleanup_trip_images(db, self.storage, NOW)
+        live = Mock()
+        live.get_indexes.return_value = [{"name": "uq_token", "column_names": ["token_hash"], "unique": True}]
+        live.get_unique_constraints.return_value = []
+        with patch("trip_image_cleanup.inspect", return_value=live):
+            result = cleanup_trip_images(db, self.storage, NOW)
         self.assertEqual(result.orphan_deleted, 1)
         self.assertFalse((self.root / promoted.relative_path).exists())
+
+    def test_mysql_requires_live_exact_single_column_unique_token_index(self):
+        variants = (
+            ([{"column_names": ["token_hash"], "unique": False}], [], False),
+            ([{"column_names": ["token_hash", "id"], "unique": True}], [], False),
+            ([], [{"column_names": ["token_hash"]}], True),
+        )
+        for indexes, constraints, expected_delete in variants:
+            with self.subTest(indexes=indexes, constraints=constraints), tempfile.TemporaryDirectory() as directory:
+                storage = ImageStorage(root=Path(directory).resolve(), token_secret=SECRET, now=lambda: NOW)
+                promoted = storage.promote(storage.save_temp(JPEG, "old.jpg", "image/jpeg").token, NOW - timedelta(days=2))
+                candidate_query = Mock(); candidate_query.filter.return_value.all.return_value = []
+                orphan_query = Mock(); orphan_query.filter.return_value.with_for_update.return_value.first.return_value = None
+                db = Mock(); db.query.side_effect = [candidate_query, orphan_query]
+                db.get_bind.return_value.dialect.name = "mysql"
+                db.connection.return_value.get_isolation_level.return_value = "REPEATABLE READ"
+                live = Mock(); live.get_indexes.return_value = indexes; live.get_unique_constraints.return_value = constraints
+                with patch("trip_image_cleanup.inspect", return_value=live):
+                    result = cleanup_trip_images(db, storage, NOW)
+                self.assertEqual(result.orphan_deleted, int(expected_delete))
+                self.assertEqual((Path(directory) / promoted.relative_path).exists(), not expected_delete)
+                if not expected_delete:
+                    self.assertIn("orphan_unique_index_unsafe", result.errors)
 
     def test_cleanup_wins_then_queued_confirmation_rolls_back_on_missing_promotion(self):
         db = self.Session()

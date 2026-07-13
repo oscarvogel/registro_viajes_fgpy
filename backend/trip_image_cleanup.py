@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from models import ViajeImagen
 from image_storage import ImageStoragePathError
 
@@ -14,6 +14,9 @@ class TripImageCleanupResult:
     orphan_deleted: int = 0
     invalid_promotions: int = 0
     errors: tuple[str, ...] = ()
+
+
+ORPHAN_GRACE = timedelta(hours=24)
 
 
 def _matches_stored_naive_utc(stored: datetime, signed: datetime, *, seconds_precision: bool) -> bool:
@@ -29,7 +32,7 @@ def _matches_stored_naive_utc(stored: datetime, signed: datetime, *, seconds_pre
     return stored == expected
 
 
-def cleanup_trip_images(db, storage, now: datetime, orphan_grace: timedelta = timedelta(hours=24)) -> TripImageCleanupResult:
+def cleanup_trip_images(db, storage, now: datetime) -> TripImageCleanupResult:
     """Clean evidence under filesystem and database locks.
 
     On MySQL, orphan safety requires confirmed REPEATABLE READ or SERIALIZABLE
@@ -38,16 +41,14 @@ def cleanup_trip_images(db, storage, now: datetime, orphan_grace: timedelta = ti
     """
     if now.tzinfo is None or now.utcoffset() != timedelta(0):
         raise ValueError("now must be timezone-aware UTC")
-    if not isinstance(orphan_grace, timedelta) or orphan_grace < timedelta(0):
-        raise ValueError("orphan_grace must be non-negative")
     try:
         with storage.cleanup_lock():
-            return _cleanup_locked(db, storage, now, orphan_grace)
+            return _cleanup_locked(db, storage, now)
     except ImageStoragePathError:
         return TripImageCleanupResult(errors=("cleanup_lock",))
 
 
-def _cleanup_locked(db, storage, now: datetime, orphan_grace: timedelta) -> TripImageCleanupResult:
+def _cleanup_locked(db, storage, now: datetime) -> TripImageCleanupResult:
     errors = []
     expired_deleted = temp_deleted = orphan_deleted = invalid_promotions = 0
     try:
@@ -110,7 +111,7 @@ def _cleanup_locked(db, storage, now: datetime, orphan_grace: timedelta) -> Trip
             errors.append("expired_metadata_mismatch")
             continue
         try:
-            storage.delete_confirmed(evidence_storage_path)
+            storage.delete_confirmed_promotion(promotion)
         except Exception:
             db.rollback()
             errors.append("expired_storage_delete")
@@ -139,23 +140,32 @@ def _cleanup_locked(db, storage, now: datetime, orphan_grace: timedelta) -> Trip
             dialect = db.get_bind().dialect.name
             if dialect == "mysql":
                 isolation = str(db.connection().get_isolation_level()).upper().replace("_", " ")
-                orphan_isolation_safe = isolation in {"REPEATABLE READ", "SERIALIZABLE"} and bool(
-                    ViajeImagen.token_hash.property.columns[0].unique
-                )
+                orphan_isolation_safe = isolation in {"REPEATABLE READ", "SERIALIZABLE"}
+                live_schema = inspect(db.get_bind())
+                indexes = live_schema.get_indexes(ViajeImagen.__tablename__)
+                constraints = live_schema.get_unique_constraints(ViajeImagen.__tablename__)
+                orphan_unique_safe = any(
+                    item.get("unique") is True and item.get("column_names") == ["token_hash"] for item in indexes
+                ) or any(item.get("column_names") == ["token_hash"] for item in constraints)
             elif dialect == "sqlite":
                 orphan_isolation_safe = True
+                orphan_unique_safe = True
             else:
                 orphan_isolation_safe = False
+                orphan_unique_safe = False
         except Exception:
             orphan_isolation_safe = False
+            orphan_unique_safe = False
         if not orphan_isolation_safe and scan.promotions:
             errors.append("orphan_isolation_unsafe")
+        elif not orphan_unique_safe and scan.promotions:
+            errors.append("orphan_unique_index_unsafe")
         for promotion in scan.promotions:
             if promotion.token_hash in expired_tokens_deleted:
                 continue
-            if promotion.confirmed_at > now - orphan_grace:
+            if promotion.confirmed_at > now - ORPHAN_GRACE:
                 continue
-            if not orphan_isolation_safe:
+            if not orphan_isolation_safe or not orphan_unique_safe:
                 continue
             try:
                 if dialect == "sqlite":

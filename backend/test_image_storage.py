@@ -446,6 +446,26 @@ class ImageStorageTestCase(unittest.TestCase):
                 with other.cleanup_lock():
                     self.fail("second cleanup lock unexpectedly acquired")
 
+    def test_enumeration_does_not_hash_retained_confirmed_files(self):
+        for index in range(100):
+            saved = self.storage.save_temp(JPEG + str(index).encode(), f"{index}.jpg", "image/jpeg")
+            self.storage.promote(saved.token, NOW)
+        with patch.object(self.storage, "_inspect_file", wraps=self.storage._inspect_file) as inspect_file:
+            scan = self.storage.enumerate_promotions()
+        self.assertEqual(len(scan.promotions), 100)
+        inspect_file.assert_not_called()
+
+    def test_validate_promotion_hashes_only_requested_candidate(self):
+        promotions = []
+        for index in range(3):
+            saved = self.storage.save_temp(JPEG + str(index).encode(), f"{index}.jpg", "image/jpeg")
+            self.storage.promote(saved.token, NOW)
+            promotions.append(self.storage.enumerate_promotions().promotions[-1])
+        with patch.object(self.storage, "_inspect_file", wraps=self.storage._inspect_file) as inspect_file:
+            validated = self.storage.validate_promotion(promotions[0])
+        self.assertEqual(validated, promotions[0])
+        self.assertEqual(inspect_file.call_count, 1)
+
     def test_cleanup_continues_past_malformed_tampered_and_naive_metadata(self):
         expired = self.storage.save_temp(JPEG, "expired.jpg", "image/jpeg")
         malformed = self.storage.save_temp(PNG, "malformed.png", "image/png")

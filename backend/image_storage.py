@@ -647,7 +647,9 @@ class ImageStorage:
         except (ImageStorageError, OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise ImageValidationError("Invalid promotion receipt") from exc
 
-    def _parse_promotion_receipt(self, receipt_path: Path, signed_receipt: str, *, require_file: bool = True) -> PromotionMetadata:
+    def _parse_promotion_receipt(
+        self, receipt_path: Path, signed_receipt: str, *, require_file: bool = True, validate_file: bool = True
+    ) -> PromotionMetadata:
         try:
             receipt = self._decode_signed(signed_receipt)
             expected_keys = {
@@ -685,7 +687,7 @@ class ImageStorage:
                 raise ImageValidationError("Invalid promotion receipt")
             image_path = self._safe_path(expected_relative, required_prefix="confirmed")
             file_present = image_path.is_file()
-            if file_present:
+            if file_present and validate_file:
                 self._validate_confirmed_file(image_path, receipt["source_sha256"], mime)
                 if image_path.stat().st_size != receipt["source_size"]:
                     raise ImageValidationError("Invalid promotion receipt")
@@ -712,10 +714,49 @@ class ImageStorage:
                     raise ImageValidationError("Invalid promotion receipt")
                 self._assert_no_symlink_components(receipt_path, "receipts")
                 signed = receipt_path.read_text(encoding="ascii")
-                promotions.append(self._parse_promotion_receipt(receipt_path.resolve(), signed, require_file=False))
+                promotions.append(self._parse_promotion_receipt(
+                    receipt_path.resolve(), signed, require_file=False, validate_file=False
+                ))
             except (ImageStorageError, OSError, UnicodeError):
                 invalid += 1
         return PromotionScan(tuple(promotions), invalid)
+
+    def validate_promotion(self, promotion: PromotionMetadata) -> PromotionMetadata:
+        """Revalidate an exact signed promotion and its confirmed file."""
+        if not isinstance(promotion, PromotionMetadata):
+            raise ImageValidationError("Invalid promotion metadata")
+        with self._promotion_lock(promotion._upload_id):
+            receipt_path = self._receipt_path(promotion._upload_id)
+            try:
+                signed = receipt_path.read_text(encoding="ascii")
+            except (OSError, UnicodeError) as exc:
+                raise ImageStoragePathError("Promotion receipt cannot be read") from exc
+            if not hmac.compare_digest(signed, promotion._signed_receipt):
+                raise ImageValidationError("Promotion receipt changed")
+            current = self._parse_promotion_receipt(receipt_path.resolve(), signed)
+            if current != promotion:
+                raise ImageValidationError("Promotion metadata changed")
+            return current
+
+    def delete_confirmed_promotion(self, promotion: PromotionMetadata) -> None:
+        """Validate and delete only the exact confirmed file, retaining its receipt."""
+        if not isinstance(promotion, PromotionMetadata):
+            raise ImageValidationError("Invalid promotion metadata")
+        with self._promotion_lock(promotion._upload_id):
+            receipt_path = self._receipt_path(promotion._upload_id)
+            try:
+                signed = receipt_path.read_text(encoding="ascii")
+            except (OSError, UnicodeError) as exc:
+                raise ImageStoragePathError("Promotion receipt cannot be read") from exc
+            if not hmac.compare_digest(signed, promotion._signed_receipt):
+                raise ImageValidationError("Promotion receipt changed")
+            current = self._parse_promotion_receipt(receipt_path.resolve(), signed, require_file=False)
+            image_path = self._safe_path(current.relative_path, required_prefix="confirmed")
+            try:
+                image_path.unlink(missing_ok=True)
+                self._sync_directory(image_path.parent)
+            except OSError as exc:
+                raise ImageStoragePathError("Confirmed image could not be deleted") from exc
 
     def delete_orphaned_promotion(self, promotion: PromotionMetadata) -> bool:
         if not isinstance(promotion, PromotionMetadata):
