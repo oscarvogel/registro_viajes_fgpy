@@ -162,12 +162,57 @@ class MiniMaxVisionClientTests(unittest.TestCase):
         invalid_values.extend([
             {**VALID, "confidence": []},
             {**VALID, "warnings": "none"},
-            {**VALID, "peso_bruto": "12000"},
+            {**VALID, "peso_bruto": []},
         ])
         for value in invalid_values:
             with self.subTest(keys=value.keys()):
                 with self.assertRaises(MiniMaxVisionError):
                     self.client(FakeExecutor(tool_response(value))).analyze(self.image)
+
+    def test_mcp_tool_error_rejects_even_valid_looking_content(self):
+        response = {"result": {"isError": True, "content": [{"type": "text", "text": json.dumps(VALID)}]}}
+        with self.assertRaises(MiniMaxVisionError):
+            self.client(FakeExecutor(response)).analyze(self.image)
+
+    def test_result_must_be_object(self):
+        for result in (None, [], "top-secret"):
+            with self.subTest(result=result):
+                with self.assertRaises(MiniMaxVisionError) as caught:
+                    self.client(FakeExecutor({"result": result})).analyze(self.image)
+                self.assertNotIn("top-secret", repr(caught.exception))
+
+    def test_schema_rejects_extra_keys_nonfinite_and_bad_confidence(self):
+        values = [
+            {**VALID, "extra": "unexpected"},
+            {**VALID, "peso_bruto": float("inf")},
+            {**VALID, "peso_bruto": "NaN"},
+            {**VALID, "confidence": {"unknown": 0.5}},
+            {**VALID, "confidence": {"fecha_remision": 1.1}},
+            {**VALID, "confidence": {"fecha_remision": float("nan")}},
+        ]
+        for value in values:
+            with self.subTest(value=value):
+                with self.assertRaises(MiniMaxVisionError):
+                    self.client(FakeExecutor(tool_response(value))).analyze(self.image)
+
+    def test_json_constants_nan_and_infinity_are_rejected(self):
+        for constant in ("NaN", "Infinity", "-Infinity"):
+            raw = json.dumps(VALID).replace("12000", constant, 1)
+            with self.subTest(constant=constant):
+                with self.assertRaises(MiniMaxVisionError):
+                    self.client(FakeExecutor({"result": {"content": [{"type": "text", "text": raw}]}})).analyze(self.image)
+
+    def test_weight_strings_are_boundary_values_not_normalized_here(self):
+        value = {**VALID, "peso_bruto": "12.000,50"}
+        self.assertEqual(self.client(FakeExecutor(tool_response(value))).analyze(self.image)["peso_bruto"], "12.000,50")
+
+    def test_invalid_runtime_configuration_fails_before_executor(self):
+        for kwargs in ({"timeout_seconds": 0}, {"max_output_bytes": 0}, {"command": []}):
+            executor = FakeExecutor(tool_response())
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaises(MiniMaxVisionConfigurationError):
+                    self.client(executor, **kwargs).analyze(self.image)
+                self.assertEqual(executor.calls, [])
 
     def test_defaults_are_bounded_and_configurable(self):
         executor = FakeExecutor(tool_response())

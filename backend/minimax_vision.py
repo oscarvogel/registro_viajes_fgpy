@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import re
@@ -25,7 +26,8 @@ class MiniMaxVisionConfigurationError(MiniMaxVisionError):
 PROMPT = """Analiza la imagen para precargar un viaje. Devuelve EXCLUSIVAMENTE un unico objeto JSON,
 sin prosa ni markdown, con estas claves exactas: fecha_remision; remito_tipo; remito_sucursal;
 remito_numero; proveedor_candidato; peso_bruto; tara; neto; unidad_peso; patente_observada;
-chofer_observado; confidence (objeto con confianza por campo); warnings (array de textos).
+chofer_observado; confidence (objeto por campo, solo para las claves de datos anteriores y con
+valores entre 0 y 1); warnings (array de textos).
 Usa null cuando un dato no sea visible. Conserva los pesos y su unidad tal como se observan.
 OCR no elige el chofer configurado, la patente configurada ni la unidad configurada: solo informa
 texto observado. No normalices datos de negocio ni inventes valores."""
@@ -40,6 +42,7 @@ _TEXT_FIELDS = {
     "proveedor_candidato", "unidad_peso", "patente_observada", "chofer_observado",
 }
 _WEIGHT_FIELDS = {"peso_bruto", "tara", "neto"}
+_CONFIDENCE_FIELDS = _TEXT_FIELDS | _WEIGHT_FIELDS
 
 
 def _argv(command: str | list[str]) -> list[str]:
@@ -163,18 +166,22 @@ class MiniMaxVisionClient:
         key = self._api_key or os.getenv("MINIMAX_API_KEY")
         if not key:
             raise MiniMaxVisionConfigurationError("MINIMAX_API_KEY no esta configurada")
-        command = self._command or os.getenv("MINIMAX_VISION_COMMAND", "uvx minimax-coding-plan-mcp -y")
+        command = self._command if self._command is not None else os.getenv("MINIMAX_VISION_COMMAND", "uvx minimax-coding-plan-mcp -y")
+        try:
+            argv = _argv(command)
+            timeout = float(self._timeout if self._timeout is not None else os.getenv("MINIMAX_VISION_TIMEOUT_SECONDS", "90"))
+            maximum = int(self._max_output if self._max_output is not None else os.getenv("MINIMAX_VISION_MAX_OUTPUT_BYTES", str(1024 * 1024)))
+            if not math.isfinite(timeout) or timeout <= 0 or maximum <= 0:
+                raise ValueError
+        except (TypeError, ValueError, MiniMaxVisionConfigurationError):
+            raise MiniMaxVisionConfigurationError("Configuracion MiniMax Vision invalida") from None
         failure = None
         response = None
         try:
-            timeout = float(self._timeout if self._timeout is not None else os.getenv("MINIMAX_VISION_TIMEOUT_SECONDS", "90"))
-            maximum = int(self._max_output if self._max_output is not None else os.getenv("MINIMAX_VISION_MAX_OUTPUT_BYTES", str(1024 * 1024)))
-            if timeout <= 0 or maximum <= 0:
-                raise ValueError
             env = os.environ.copy()
             env["MINIMAX_API_KEY"] = key
             response = self._executor(
-                argv=_argv(command), messages=_messages(Path(image_path)), env=env,
+                argv=argv, messages=_messages(Path(image_path)), env=env,
                 timeout_seconds=timeout, max_output_bytes=maximum,
             )
         except MiniMaxVisionError:
@@ -195,7 +202,10 @@ def _parse_response(response: Any) -> dict[str, Any]:
     try:
         if not isinstance(response, dict) or "error" in response:
             raise ValueError
-        content = response["result"]["content"]
+        result = response["result"]
+        if not isinstance(result, dict) or result.get("isError") is True:
+            raise ValueError
+        content = result["content"]
         if not isinstance(content, list) or not all(isinstance(item, dict) for item in content):
             raise TypeError
         texts = [item["text"] for item in content if item.get("type") == "text" and isinstance(item.get("text"), str)]
@@ -205,7 +215,7 @@ def _parse_response(response: Any) -> dict[str, Any]:
         fenced = re.fullmatch(r"```json\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
         if fenced:
             text = fenced.group(1)
-        value = json.loads(text)
+        value = json.loads(text, parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()))
         if not isinstance(value, dict):
             raise ValueError
         _validate(value)
@@ -218,14 +228,30 @@ def _parse_response(response: Any) -> dict[str, Any]:
 
 
 def _validate(value: dict[str, Any]) -> None:
-    if not _REQUIRED.issubset(value):
+    if set(value) != _REQUIRED:
         raise ValueError
     if any(value[key] is not None and not isinstance(value[key], str) for key in _TEXT_FIELDS):
         raise TypeError
-    if any(value[key] is not None and (isinstance(value[key], bool) or not isinstance(value[key], (int, float))) for key in _WEIGHT_FIELDS):
+    if any(
+        value[key] is not None and (
+            isinstance(value[key], bool)
+            or not isinstance(value[key], (int, float, str))
+            or (isinstance(value[key], (int, float)) and not math.isfinite(value[key]))
+            or (isinstance(value[key], str) and value[key].strip().lower() in {
+                "nan", "+nan", "-nan", "inf", "+inf", "-inf",
+                "infinity", "+infinity", "-infinity",
+            })
+        )
+        for key in _WEIGHT_FIELDS
+    ):
         raise TypeError
     if not isinstance(value["confidence"], dict) or not all(
-        isinstance(key, str) and (score is None or (not isinstance(score, bool) and isinstance(score, (int, float))))
+        key in _CONFIDENCE_FIELDS
+        and score is not None
+        and not isinstance(score, bool)
+        and isinstance(score, (int, float))
+        and math.isfinite(score)
+        and 0 <= score <= 1
         for key, score in value["confidence"].items()
     ):
         raise TypeError
