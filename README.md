@@ -10,7 +10,7 @@ Estado actual:
 
 - Frontend Vue/Vite recuperado, instala dependencias, pasa tests y compila.
 - Servidor local del frontend verificado en `http://127.0.0.1:5173/`.
-- Backend parcialmente recuperado: `backend/main.py` compila, pero todavía faltan módulos locales (`database.py`, modelos, esquemas y servicios). Los tests backend no pueden correr hasta recuperar esos archivos del servidor.
+- Backend FastAPI recuperado, compila, conecta por `.env` local y pasa las pruebas disponibles.
 
 ## Estructura
 
@@ -52,25 +52,32 @@ registro_viajes/
 ## Frontend
 
 ```powershell
-Set-Location O:\proyectos\actives\registro_viajes\frontend
+git clone https://github.com/oscarvogel/registro_viajes_fgpy.git
+Set-Location registro_viajes_fgpy\frontend
 npm install --strict-ssl=false
 npm test
 npm run build
 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
-El `--strict-ssl=false` fue necesario en esta máquina por un problema local de certificados contra el registry de npm.
+Si ya tenés el proyecto clonado, reemplazá los dos primeros comandos por entrar a la carpeta donde lo tengas guardado:
+
+```powershell
+Set-Location <carpeta-donde-clonaste-el-repo>\frontend
+```
+
+El `--strict-ssl=false` fue necesario en esta máquina por un problema local de certificados contra el registry de npm. Si tu npm funciona normal, podés usar simplemente `npm install`.
 
 ## Backend
 
-El backend todavía no está completo. Para dejarlo ejecutable se deben recuperar o crear:
+Antes de levantar el backend, crear `backend\.env` a partir de `backend\.env.example` y completar los valores reales fuera de Git.
 
-1. `backend/database.py`
-2. `backend/models.py`
-3. `backend/schemas.py`
-4. Servicios locales importados por `backend/main.py`
-5. `backend/requirements.txt`
-6. Un archivo `.env.example` sin credenciales, con la configuración requerida.
+```powershell
+Set-Location registro_viajes_fgpy
+py -m pip install -r backend\requirements.txt
+py -m pytest backend -q
+py -m py_compile backend\main.py backend\database.py backend\models.py backend\schemas.py
+```
 
 No se deben guardar credenciales, claves JWT, conexiones de base de datos ni archivos `.env` reales en Git.
 
@@ -79,8 +86,8 @@ No se deben guardar credenciales, claves JWT, conexiones de base de datos ni arc
 - `frontend`: `npm test` pasa 56/56.
 - `frontend`: `npm run build` genera `dist/` correctamente.
 - `frontend`: `http://127.0.0.1:5173/` responde 200.
-- `backend`: `py -m py_compile backend\main.py` pasa.
-- `backend`: `py -m pytest backend -q` falla por `ModuleNotFoundError: No module named 'database'`.
+- `backend`: `py -m pytest backend -q` pasa.
+- `backend`: `/api/panioles?limit=10000` responde 200 contra MySQL configurado por `.env`.
 
 ## Documentación
 
