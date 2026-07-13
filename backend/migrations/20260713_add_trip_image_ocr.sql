@@ -104,9 +104,8 @@ BEGIN
         SELECT COUNT(*) INTO duplicate_token_groups
           FROM (
               SELECT token_hash
-                FROM viaje_imagenes
+               FROM viaje_imagenes
                WHERE token_hash IS NOT NULL
-                 AND token_hash <> ''
                GROUP BY token_hash
               HAVING COUNT(*) > 1
           ) AS duplicate_tokens;

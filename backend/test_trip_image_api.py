@@ -60,6 +60,8 @@ class TripImageModelMetadataTest(unittest.TestCase):
 
         for required in (duplicate_query, signal, drop_token_index, add_unique_token):
             self.assertIn(required, migration)
+        self.assertIn("token_hash IS NOT NULL", migration)
+        self.assertNotIn("token_hash <> ''", migration)
         self.assertLess(migration.index(duplicate_query), migration.index(signal))
         self.assertLess(migration.index(signal), migration.index(drop_token_index))
         self.assertLess(migration.index(signal), migration.index(add_unique_token))
