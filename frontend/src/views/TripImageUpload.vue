@@ -9,6 +9,7 @@ import {
   createTripImageObjectUrl,
   fetchTripImageBlob,
   mapTripImageError,
+  prepareTripImageForUpload,
   revokeTripImageObjectUrl,
   validateTripImageFile,
 } from '../services/tripImage.js'
@@ -102,14 +103,16 @@ const analyzeSelected = async () => {
 const chooseFile = async (event) => {
   const file = event.target.files?.[0]
   if (!file) return
+  let uploadFile
   try {
-    validateTripImageFile(file)
-    replacePreview(file)
+    validateTripImageFile(file, Number.MAX_SAFE_INTEGER)
+    uploadFile = await prepareTripImageForUpload(file)
   } catch (error) {
     showError(error, 'select')
     return
   }
-  selectedFile.value = file
+  replacePreview(file)
+  selectedFile.value = uploadFile
   review.value = null
   result.value = null
   errorMessage.value = ''

@@ -6,6 +6,7 @@ import {
   createTripImageObjectUrl,
   fetchTripImageBlob,
   mapTripImageError,
+  prepareTripImageForUpload,
   revokeTripImageObjectUrl,
   tripImageUrl,
 } from '../src/services/tripImage.js'
@@ -166,6 +167,42 @@ test('createReviewModel exposes only concrete configuration mismatches', () => {
   assert.deepEqual(review.configurationWarnings, [
     'La foto parece indicar ZZ999ZZ; en Ajustes figura AB 123 CD.',
     'La foto parece indicar Otra Persona; el usuario actual es Pérez Ana.',
+  ])
+})
+
+test('prepareTripImageForUpload compresses oversized mobile images before upload', async () => {
+  const large = new File([new Uint8Array(2 * 1024)], 'remito.png', { type: 'image/png' })
+  const compressed = new Blob(['compressed'], { type: 'image/jpeg' })
+  const calls = []
+  const imageApi = {
+    createImageBitmap: async (blob) => {
+      calls.push(['decode', blob])
+      return { width: 4000, height: 3000, close: () => calls.push(['close']) }
+    },
+    createCanvas: () => {
+      const canvas = {
+        width: 0,
+        height: 0,
+        getContext: () => ({ drawImage: (...args) => calls.push(['drawImage', canvas.width, canvas.height, args.length]) }),
+        toBlob: (callback, type, quality) => {
+          calls.push(['toBlob', canvas.width, canvas.height, type, quality])
+          callback(compressed)
+        },
+      }
+      return canvas
+    },
+  }
+
+  const result = await prepareTripImageForUpload(large, { maxBytes: 1024, maxSide: 2000, imageApi })
+
+  assert.equal(result.size, compressed.size)
+  assert.equal(result.type, 'image/jpeg')
+  assert.equal(result.name, 'remito.jpg')
+  assert.deepEqual(calls, [
+    ['decode', large],
+    ['drawImage', 2000, 1500, 5],
+    ['toBlob', 2000, 1500, 'image/jpeg', 0.82],
+    ['close'],
   ])
 })
 

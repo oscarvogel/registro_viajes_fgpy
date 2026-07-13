@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   analyze: vi.fn(),
   confirm: vi.fn(),
   fetchBlob: vi.fn(),
+  prepare: vi.fn(async (file) => file),
   createUrl: vi.fn(() => 'blob:preview'),
   revokeUrl: vi.fn(),
   catalog: {
@@ -30,6 +31,7 @@ vi.mock('../src/services/tripImage.js', async () => {
     analyzeTripImage: mocks.analyze,
     confirmTripImage: mocks.confirm,
     fetchTripImageBlob: mocks.fetchBlob,
+    prepareTripImageForUpload: mocks.prepare,
     createTripImageObjectUrl: mocks.createUrl,
     revokeTripImageObjectUrl: mocks.revokeUrl,
   }
@@ -72,6 +74,7 @@ beforeEach(() => {
   mocks.confirm.mockResolvedValue({ viaje_id: 12, imagen_id: 21 })
   mocks.fetchBlob.mockResolvedValue(new Blob(['confirmed'], { type: 'image/jpeg' }))
   mocks.createUrl.mockReturnValueOnce('blob:local').mockReturnValue('blob:confirmed')
+  mocks.prepare.mockImplementation(async (selected) => selected)
 })
 
 describe('TripImageUpload', () => {
@@ -97,6 +100,19 @@ describe('TripImageUpload', () => {
     await selectFile(failure, file())
     expect(failure.text()).toContain('No hay conexión. Verificá Internet e intentá nuevamente.')
     expect(failure.get('img[alt="Foto conservada para reintentar"]').attributes('src')).toBe('blob:local')
+  })
+
+  it('analyzes the prepared upload image while keeping the original preview', async () => {
+    const original = file('remito-grande.png', 'image/png')
+    const prepared = new File(['small'], 'remito-grande.jpg', { type: 'image/jpeg' })
+    mocks.prepare.mockResolvedValueOnce(prepared)
+
+    const wrapper = await mountView()
+    await selectFile(wrapper, original)
+
+    expect(mocks.prepare).toHaveBeenCalledWith(original)
+    expect(mocks.createUrl).toHaveBeenCalledWith(original)
+    expect(mocks.analyze).toHaveBeenCalledWith(prepared)
   })
 
   it('does not render an OCR warning block when configuration matches', async () => {

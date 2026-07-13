@@ -6,6 +6,8 @@ const endpoint = (apiUrl, path) => `${String(apiUrl).replace(/\/$/, '')}${path}`
 const TRIP_IMAGE_MAX_BYTES = 10 * 1024 * 1024
 const TRIP_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
 const TRIP_IMAGE_EXTENSION = /\.(?:jpe?g|png|webp)$/i
+const TRIP_IMAGE_RESIZE_MAX_SIDE = 2200
+const TRIP_IMAGE_RESIZE_QUALITY = 0.82
 
 export const validateTripImageFile = (file, maxBytes = TRIP_IMAGE_MAX_BYTES) => {
   if (typeof Blob === 'undefined' || !(file instanceof Blob)) throw new TypeError('Seleccioná una imagen válida.')
@@ -16,6 +18,77 @@ export const validateTripImageFile = (file, maxBytes = TRIP_IMAGE_MAX_BYTES) => 
   if (!Number.isFinite(maxBytes) || maxBytes <= 0 || file.size <= 0) throw new TypeError('La imagen está vacía o no es válida.')
   if (file.size > maxBytes) throw new TypeError('La imagen es demasiado grande. El máximo es 10 MB.')
   return file
+}
+
+const jpegNameFor = (file) => {
+  const raw = typeof file?.name === 'string' && file.name.trim() ? file.name.trim() : 'image'
+  const withoutExtension = raw.replace(/\.[^.\\/]+$/, '') || 'image'
+  return `${withoutExtension}.jpg`
+}
+
+const createFileFromBlob = (blob, source) => {
+  const type = blob.type || 'image/jpeg'
+  const name = jpegNameFor(source)
+  try {
+    return new File([blob], name, { type, lastModified: Date.now() })
+  } catch {
+    return blob
+  }
+}
+
+const canvasToBlob = (canvas, type, quality) => new Promise((resolve, reject) => {
+  if (typeof canvas?.toBlob !== 'function') {
+    reject(new TypeError('Este dispositivo no puede ajustar la imagen.'))
+    return
+  }
+  canvas.toBlob((blob) => resolve(blob), type, quality)
+})
+
+const defaultImageApi = {
+  createImageBitmap: typeof globalThis.createImageBitmap === 'function'
+    ? (blob) => globalThis.createImageBitmap(blob)
+    : undefined,
+  createCanvas: () => globalThis.document?.createElement?.('canvas'),
+}
+
+export const prepareTripImageForUpload = async (file, {
+  maxBytes = TRIP_IMAGE_MAX_BYTES,
+  maxSide = TRIP_IMAGE_RESIZE_MAX_SIDE,
+  quality = TRIP_IMAGE_RESIZE_QUALITY,
+  imageApi = defaultImageApi,
+} = {}) => {
+  validateTripImageFile(file, Number.MAX_SAFE_INTEGER)
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0) throw new TypeError('La imagen está vacía o no es válida.')
+  if (file.size <= maxBytes) return file
+  if (typeof imageApi?.createImageBitmap !== 'function' || typeof imageApi?.createCanvas !== 'function') {
+    throw new TypeError('La imagen es demasiado grande y este dispositivo no pudo ajustarla.')
+  }
+
+  let bitmap
+  try {
+    bitmap = await imageApi.createImageBitmap(file)
+    const width = Number(bitmap?.width)
+    const height = Number(bitmap?.height)
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      throw new TypeError('La imagen está vacía o no es válida.')
+    }
+    const scale = Math.min(1, maxSide / Math.max(width, height))
+    const targetWidth = Math.max(1, Math.round(width * scale))
+    const targetHeight = Math.max(1, Math.round(height * scale))
+    const canvas = imageApi.createCanvas()
+    if (!canvas) throw new TypeError('Este dispositivo no puede ajustar la imagen.')
+    canvas.width = targetWidth
+    canvas.height = targetHeight
+    const context = canvas.getContext?.('2d')
+    if (!context) throw new TypeError('Este dispositivo no puede ajustar la imagen.')
+    context.drawImage(bitmap, 0, 0, targetWidth, targetHeight)
+    const compressed = await canvasToBlob(canvas, 'image/jpeg', quality)
+    if (!(compressed instanceof Blob) || compressed.size <= 0) throw new TypeError('Este dispositivo no pudo ajustar la imagen.')
+    if (compressed.size > maxBytes) throw new TypeError('La imagen sigue siendo demasiado grande. Probá sacar la foto con menor resolución.')
+    return createFileFromBlob(compressed, file)
+  } finally {
+    if (typeof bitmap?.close === 'function') bitmap.close()
+  }
 }
 
 export const createTripImageLifecycle = () => {
