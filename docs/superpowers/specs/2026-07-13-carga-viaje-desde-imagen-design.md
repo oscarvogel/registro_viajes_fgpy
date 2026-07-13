@@ -139,6 +139,8 @@ Se incorporará una tabla específica de evidencia vinculada al registro del via
 
 La tabla se creará mediante una migración explícita. No se dependerá silenciosamente de la creación automática de tablas al iniciar producción.
 
+La misma migración incorporará `pesaje_unico` en `tablero_produccion` y permitirá `NULL` en `cliente_id`. Este último cambio es necesario porque el flujo aprobado conserva el cliente vacío; no se usará el cliente `1` como valor sustituto. Antes de aplicar la migración se verificará el tipo real y las restricciones actuales de ambas columnas en producción.
+
 La retención será de 60 días desde la confirmación. La limpieza borrará primero el archivo y después marcará o eliminará el metadato según la estrategia vigente del proyecto. Los archivos temporales abandonados tendrán una retención corta independiente. La tarea se diseñará para ejecutarse varias veces sin fallar y deberá coordinarse con la futura corrección del scheduler registrada en el issue correspondiente.
 
 ## Validaciones
@@ -211,7 +213,7 @@ El despliegue incluirá:
 
 - Variables `MINIMAX_API_KEY`, `VIAJE_IMAGE_STORAGE_DIR`, límite de archivo y días de retención.
 - Creación segura del directorio con permisos para el servicio.
-- Migración explícita de la tabla de evidencia y del campo `pesaje_unico` requerido por el modelo persistente.
+- Migración explícita de la tabla de evidencia, del campo `pesaje_unico` y de la nulabilidad de `cliente_id` requerida por este flujo.
 - Compilación verificada del frontend.
 - Pruebas backend, frontend y smoke test público.
 - Reinicio del servicio realizado por el usuario si requiere `sudo`.
