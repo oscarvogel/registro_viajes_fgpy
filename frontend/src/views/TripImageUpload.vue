@@ -228,11 +228,15 @@ onUnmounted(() => {
     <form v-else-if="state === 'reviewing' || state === 'confirming'" class="space-y-4" @submit.prevent="confirmReview">
       <img v-if="previewUrl" :src="previewUrl" alt="Foto original para revisar" class="max-h-[48vh] w-full rounded-xl bg-gray-100 object-contain shadow dark:bg-gray-800">
 
-      <section v-if="review.warnings.length || review.observed.patente || review.observed.chofer" class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
-        <h2 class="font-semibold">Datos observados en la foto</h2>
-        <p v-if="review.observed.patente" class="mt-1">Patente observada: {{ review.observed.patente }}</p>
-        <p v-if="review.observed.chofer">Chofer observado: {{ review.observed.chofer }}</p>
-        <ul v-if="review.warnings.length" class="mt-2 list-disc space-y-1 pl-5"><li v-for="warning in review.warnings" :key="warning">{{ warning }}</li></ul>
+      <section
+        v-if="review.configurationWarnings.length"
+        class="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100"
+        role="alert"
+      >
+        <h2 class="font-semibold">Revisá la configuración</h2>
+        <ul class="mt-2 list-disc space-y-1 pl-5">
+          <li v-for="warning in review.configurationWarnings" :key="warning">{{ warning }}</li>
+        </ul>
       </section>
 
       <section class="space-y-4 rounded-xl bg-white p-4 shadow dark:bg-gray-800">

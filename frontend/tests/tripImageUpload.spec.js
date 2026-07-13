@@ -99,6 +99,35 @@ describe('TripImageUpload', () => {
     expect(failure.get('img[alt="Foto conservada para reintentar"]').attributes('src')).toBe('blob:local')
   })
 
+  it('does not render an OCR warning block when configuration matches', async () => {
+    const wrapper = await mountView()
+    await selectFile(wrapper, file())
+
+    expect(wrapper.text()).not.toContain('Datos observados en la foto')
+    expect(wrapper.text()).not.toContain('Revisá la configuración')
+  })
+
+  it('renders one compact alert only for concrete configuration mismatches', async () => {
+    mocks.analyze.mockResolvedValueOnce({
+      ...analysis,
+      proposal: {
+        ...analysis.proposal,
+        warnings: ['Texto general que no debe mostrarse'],
+        patente_observada: 'ZZ999ZZ',
+        chofer_observado: 'Otra Persona',
+      },
+    })
+    const wrapper = await mountView()
+    await selectFile(wrapper, file())
+
+    const alert = wrapper.get('[role="alert"]')
+    expect(alert.text()).toContain('Revisá la configuración')
+    expect(alert.text()).toContain('La foto parece indicar ZZ999ZZ; en Ajustes figura AB 123 CD.')
+    expect(alert.text()).toContain('La foto parece indicar Otra Persona; el usuario actual es Pérez Ana.')
+    expect(alert.text()).not.toContain('Texto general que no debe mostrarse')
+    expect(wrapper.text()).not.toContain('Datos observados en la foto')
+  })
+
   it('preserves edited fields after confirmation error and retry', async () => {
     mocks.confirm.mockRejectedValueOnce({ response: { status: 503, data: { detail: 'secret' } } })
     const wrapper = await mountView()
