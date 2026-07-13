@@ -5,11 +5,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 import subprocess
+import sys
+import textwrap
 
 from backend.minimax_vision import (
     MiniMaxVisionClient,
     MiniMaxVisionConfigurationError,
     MiniMaxVisionError,
+    _SubprocessExecutor,
+    _argv,
 )
 
 
@@ -64,7 +68,7 @@ class MiniMaxVisionClientTests(unittest.TestCase):
         executor = FakeExecutor(tool_response())
         self.client(executor, command='uvx "minimax-coding-plan-mcp" -y').analyze(self.image)
         call = executor.calls[0]
-        self.assertEqual(call["argv"], ["uvx", '"minimax-coding-plan-mcp"', "-y"] if os.name == "nt" else ["uvx", "minimax-coding-plan-mcp", "-y"])
+        self.assertEqual(call["argv"], ["uvx", "minimax-coding-plan-mcp", "-y"])
         self.assertTrue(call["key_in_env"])
         self.assertNotIn("top-secret", repr(call))
         self.assertNotIn("top-secret", repr(self.client(executor)))
@@ -267,6 +271,72 @@ class MiniMaxVisionClientTests(unittest.TestCase):
         self.assertNotIn("top-secret", str(caught.exception))
         self.assertEqual(process.wait_count, 2)
         self.assertTrue(all(stream.closed for stream in (process.stdin, process.stdout, process.stderr)))
+
+    def test_command_parser_supports_json_argv_and_windows_quotes(self):
+        self.assertEqual(_argv('["C:\\\\Program Files\\\\uvx.exe", "arg with spaces", "-y"]'), [
+            "C:\\Program Files\\uvx.exe", "arg with spaces", "-y",
+        ])
+        if os.name == "nt":
+            self.assertEqual(_argv('"C:\\Program Files\\uvx.exe" "arg with spaces" -y'), [
+                "C:\\Program Files\\uvx.exe", "arg with spaces", "-y",
+            ])
+
+    def test_real_fake_mcp_handshake_and_large_stderr(self):
+        response = _SubprocessExecutor()(
+            argv=self._fake_mcp_argv("normal"), messages=self._protocol_messages(),
+            env=os.environ.copy(), timeout_seconds=10, max_output_bytes=256 * 1024,
+        )
+        self.assertEqual(response["id"], 2)
+        self.assertEqual(response["result"]["content"][0]["text"], "{}")
+
+    def test_newline_free_oversized_stdout_is_bounded(self):
+        with self.assertRaises(OverflowError):
+            _SubprocessExecutor()(
+                argv=self._fake_mcp_argv("oversize"), messages=self._protocol_messages(),
+                env=os.environ.copy(), timeout_seconds=10, max_output_bytes=4096,
+            )
+
+    def test_windows_process_group_and_tree_kill_are_requested(self):
+        if os.name != "nt":
+            self.skipTest("Windows-specific process tree contract")
+        process = type("Process", (), {
+            "pid": 4321, "stdin": None, "stdout": None, "stderr": None,
+            "poll": lambda self: None,
+            "terminate": lambda self: None,
+            "kill": lambda self: None,
+            "wait": lambda self, timeout: None,
+        })()
+        with patch("backend.minimax_vision.subprocess.Popen", return_value=process) as popen, \
+                patch("backend.minimax_vision.subprocess.run") as run:
+            with self.assertRaises(MiniMaxVisionError):
+                MiniMaxVisionClient(api_key="safe", timeout_seconds=1e-9).analyze(self.image)
+        self.assertTrue(popen.call_args.kwargs["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP)
+        self.assertEqual(run.call_args.args[0], ["taskkill", "/PID", "4321", "/T", "/F"])
+        self.assertFalse(run.call_args.kwargs["shell"])
+
+    @staticmethod
+    def _protocol_messages():
+        from backend.minimax_vision import _messages
+        return _messages(Path("image.jpg"))
+
+    @staticmethod
+    def _fake_mcp_argv(mode):
+        code = textwrap.dedent(r'''
+            import json, sys
+            mode = sys.argv[1]
+            if mode == "oversize":
+                sys.stdout.buffer.write(b"x" * 20000); sys.stdout.buffer.flush()
+                sys.stdin.read(); raise SystemExit
+            init = json.loads(sys.stdin.readline())
+            sys.stderr.buffer.write(b"e" * 65536); sys.stderr.buffer.flush()
+            print(json.dumps({"jsonrpc":"2.0","id":init["id"],"result":{}}), flush=True)
+            notification = json.loads(sys.stdin.readline())
+            call = json.loads(sys.stdin.readline())
+            assert notification["method"] == "notifications/initialized"
+            assert call["method"] == "tools/call"
+            print(json.dumps({"jsonrpc":"2.0","id":call["id"],"result":{"content":[{"type":"text","text":"{}"}]}}), flush=True)
+        ''')
+        return [sys.executable, "-u", "-c", code, mode]
 
 
 if __name__ == "__main__":

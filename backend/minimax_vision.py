@@ -49,7 +49,26 @@ def _argv(command: str | list[str]) -> list[str]:
     if isinstance(command, list):
         result = list(command)
     else:
-        result = shlex.split(command, posix=os.name != "nt")
+        stripped = command.strip()
+        if stripped.startswith("["):
+            try:
+                result = json.loads(stripped)
+            except json.JSONDecodeError:
+                raise MiniMaxVisionConfigurationError("Comando MiniMax Vision invalido") from None
+        elif os.name == "nt":
+            import ctypes
+            argc = ctypes.c_int()
+            parser = ctypes.windll.shell32.CommandLineToArgvW
+            parser.restype = ctypes.POINTER(ctypes.c_wchar_p)
+            pointer = parser(stripped, ctypes.byref(argc))
+            if not pointer:
+                raise MiniMaxVisionConfigurationError("Comando MiniMax Vision invalido")
+            try:
+                result = [pointer[index] for index in range(argc.value)]
+            finally:
+                ctypes.windll.kernel32.LocalFree(pointer)
+        else:
+            result = shlex.split(command, posix=True)
     if not result or any(not isinstance(item, str) or not item for item in result):
         raise MiniMaxVisionConfigurationError("Comando MiniMax Vision invalido")
     return result
@@ -71,22 +90,40 @@ def _messages(image: Path) -> list[dict[str, Any]]:
 
 class _SubprocessExecutor:
     def __call__(self, *, argv, messages, env, timeout_seconds, max_output_bytes):
+        process_options = {"start_new_session": True} if os.name != "nt" else {
+            "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP,
+        }
         proc = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, encoding="utf-8", env=env, shell=False,
+            env=env, shell=False, **process_options,
         )
-        lines: queue.Queue[Any] = queue.Queue()
+        chunks: queue.Queue[Any] = queue.Queue(maxsize=32)
+        budget_lock = threading.Lock()
         total = 0
 
-        def reader():
+        def reader(kind, stream):
+            nonlocal total
             try:
-                for line in proc.stdout:
-                    lines.put(line)
+                while True:
+                    read_chunk = getattr(stream, "read1", stream.read)
+                    data = read_chunk(4096)
+                    if not data:
+                        break
+                    with budget_lock:
+                        total += len(data)
+                        exceeded = total > max_output_bytes
+                    chunks.put(("overflow" if exceeded else kind, b"" if exceeded else data))
+                    if exceeded:
+                        break
+            except Exception:
+                chunks.put(("eof", kind))
             finally:
-                lines.put(None)
+                chunks.put(("eof", kind))
 
-        threading.Thread(target=reader, daemon=True).start()
+        threading.Thread(target=reader, args=("stdout", proc.stdout), daemon=True).start()
+        threading.Thread(target=reader, args=("stderr", proc.stderr), daemon=True).start()
         deadline = time.monotonic() + timeout_seconds
+        stdout_buffer = bytearray()
         try:
             for index in (0, 2):
                 if index == 2:
@@ -98,20 +135,26 @@ class _SubprocessExecutor:
                     if remaining <= 0:
                         raise TimeoutError
                     try:
-                        line = lines.get(timeout=remaining)
+                        kind, data = chunks.get(timeout=remaining)
                     except queue.Empty as exc:
                         raise TimeoutError from exc
-                    if line is None:
-                        raise RuntimeError
-                    total += len(line.encode("utf-8"))
-                    if total > max_output_bytes:
+                    if kind == "overflow":
                         raise OverflowError
-                    try:
-                        response = json.loads(line)
-                    except json.JSONDecodeError:
+                    if kind != "stdout":
                         continue
-                    if response.get("id") == expected_id:
-                        break
+                    stdout_buffer.extend(data)
+                    while b"\n" in stdout_buffer:
+                        raw, _, remainder = stdout_buffer.partition(b"\n")
+                        stdout_buffer[:] = remainder
+                        try:
+                            response = json.loads(raw.decode("utf-8"))
+                        except (UnicodeDecodeError, json.JSONDecodeError):
+                            continue
+                        if response.get("id") == expected_id:
+                            break
+                    else:
+                        continue
+                    break
                 if "error" in response:
                     return response
             return response
@@ -119,14 +162,31 @@ class _SubprocessExecutor:
             try:
                 if proc.poll() is None:
                     try:
-                        proc.terminate()
+                        if os.name == "nt" and getattr(proc, "pid", None):
+                            subprocess.run(
+                                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                                shell=False, check=False, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, timeout=2,
+                            )
+                        elif os.name != "nt" and getattr(proc, "pid", None):
+                            import signal
+                            os.killpg(proc.pid, signal.SIGTERM)
+                        else:
+                            proc.terminate()
                     except Exception:
-                        pass
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
                     try:
                         proc.wait(timeout=2)
                     except Exception:
                         try:
-                            proc.kill()
+                            if os.name != "nt" and getattr(proc, "pid", None):
+                                import signal
+                                os.killpg(proc.pid, signal.SIGKILL)
+                            else:
+                                proc.kill()
                         except Exception:
                             pass
                         try:
@@ -143,7 +203,7 @@ class _SubprocessExecutor:
 
     @staticmethod
     def _send(proc, message):
-        proc.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+        proc.stdin.write((json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8"))
         proc.stdin.flush()
 
 
