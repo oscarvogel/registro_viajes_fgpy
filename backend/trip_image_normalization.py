@@ -56,15 +56,17 @@ def normalize_provider_name(value: Any) -> str:
 
 
 def _parse_date(value: Any) -> date:
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
     if not isinstance(value, str):
         raise ExtractionValidationError("fecha de remision invalida")
-    for format_string in ("%Y-%m-%d", "%d/%m/%Y"):
+    formats = (
+        (r"\d{4}-\d{2}-\d{2}", "%Y-%m-%d"),
+        (r"\d{2}/\d{2}/\d{4}", "%d/%m/%Y"),
+    )
+    for pattern, format_string in formats:
+        if not re.fullmatch(pattern, value):
+            continue
         try:
-            return datetime.strptime(value.strip(), format_string).date()
+            return datetime.strptime(value, format_string).date()
         except ValueError:
             continue
     raise ExtractionValidationError("fecha de remision invalida")
@@ -92,18 +94,20 @@ def _normalize_remito(data: Mapping[str, Any]) -> str:
 def _decimal_kg(value: Any) -> Decimal:
     if isinstance(value, bool) or value is None:
         raise ExtractionValidationError("peso invalido")
-    text = str(value).strip().replace(" ", "")
-    if not text:
-        raise ExtractionValidationError("peso invalido")
-    if "," in text and "." in text:
-        if text.rfind(",") < text.rfind("."):
-            text = text.replace(",", "")
-        else:
+    if isinstance(value, str):
+        text = value.strip()
+        raw_number = re.fullmatch(r"\d+(?:,\d+)?", text)
+        grouped_number = re.fullmatch(r"\d{1,3}(?:\.\d{3})+(?:,\d+)?", text)
+        if raw_number:
+            text = text.replace(",", ".")
+        elif grouped_number:
             text = text.replace(".", "").replace(",", ".")
-    elif "," in text:
-        text = text.replace(",", ".")
-    elif re.fullmatch(r"[+-]?\d{1,3}(?:\.\d{3})+", text):
-        text = text.replace(".", "")
+        else:
+            raise ExtractionValidationError("peso con formato invalido")
+    elif isinstance(value, (int, float, Decimal)):
+        text = str(value)
+    else:
+        raise ExtractionValidationError("peso invalido")
     try:
         result = Decimal(text)
     except InvalidOperation as error:
@@ -120,7 +124,7 @@ def _weight_in_tonnes(value: Any) -> Decimal:
 def normalize_extraction(data: Mapping[str, Any]) -> NormalizedExtraction:
     """Validate OCR fields and convert explicitly declared kilograms to tonnes."""
     unit = data.get("unidad_peso")
-    if not isinstance(unit, str) or unit.strip().lower() not in {"kg", "kgs"}:
+    if not isinstance(unit, str) or unit.strip().lower() != "kg":
         raise ExtractionValidationError("unidad de peso faltante o no soportada")
 
     bruto = _weight_in_tonnes(data.get("peso_bruto"))

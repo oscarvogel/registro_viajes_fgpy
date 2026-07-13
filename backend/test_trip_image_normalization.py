@@ -1,5 +1,6 @@
 import math
 import unittest
+from datetime import date, datetime
 from decimal import Decimal
 
 from backend.trip_image_normalization import (
@@ -40,15 +41,29 @@ class NormalizeExtractionTests(unittest.TestCase):
         self.assertEqual(result.fecha_remision.isoformat(), "2026-07-13")
 
     def test_rejects_unlisted_date_formats(self):
-        with self.assertRaisesRegex(ExtractionValidationError, "fecha"):
-            normalize_extraction(self.valid_data(fecha_remision="07/13/2026"))
+        invalid_dates = (
+            "07/13/2026",
+            "2026/07/13",
+            "2026-7-13",
+            "13/7/2026",
+            " 2026-07-13 ",
+            date(2026, 7, 13),
+            datetime(2026, 7, 13, 10, 30),
+        )
+        for invalid_date in invalid_dates:
+            with self.subTest(value=invalid_date), self.assertRaisesRegex(
+                ExtractionValidationError, "fecha"
+            ):
+                normalize_extraction(self.valid_data(fecha_remision=invalid_date))
 
     def test_normalizes_supported_kg_representations(self):
         representations = (
             ("49690", "17080", "32610"),
+            ("49690,00", "17080,00", "32610,00"),
             ("49.690,00", "17.080,00", "32.610,00"),
             (49690, 17080, 32610),
             (Decimal("49690"), Decimal("17080"), Decimal("32610")),
+            (49690.0, 17080.0, 32610.0),
         )
         for bruto, tara, neto in representations:
             with self.subTest(bruto=bruto):
@@ -108,11 +123,34 @@ class NormalizeExtractionTests(unittest.TestCase):
             normalize_extraction(data)
 
     def test_rejects_missing_or_unsupported_unit(self):
-        for unit in (None, "", "lb", "ton"):
+        for unit in (None, "", "kgs", "lb", "ton"):
             with self.subTest(unit=unit), self.assertRaisesRegex(
                 ExtractionValidationError, "unidad"
             ):
                 normalize_extraction(self.valid_data(unidad_peso=unit))
+
+    def test_accepts_kg_with_case_and_outer_whitespace(self):
+        self.assertEqual(
+            normalize_extraction(self.valid_data(unidad_peso="  KG ")).neto_destino,
+            Decimal("32.610"),
+        )
+
+    def test_rejects_non_paraguayan_or_ambiguous_string_weight_formats(self):
+        invalid_weights = (
+            "49,690.00",
+            "4.969E4",
+            "49..690",
+            "49.69",
+            "49.690.00",
+            "49.690,0,0",
+            "+49690",
+            "49 690",
+        )
+        for weight in invalid_weights:
+            with self.subTest(weight=weight), self.assertRaisesRegex(
+                ExtractionValidationError, "peso"
+            ):
+                normalize_extraction(self.valid_data(peso_bruto=weight))
 
     def test_rejects_negative_and_non_finite_weights(self):
         for weight in ("-1", "NaN", "Infinity", math.inf, math.nan):
