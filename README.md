@@ -49,37 +49,93 @@ registro_viajes/
 - Panel administrativo y métricas gerenciales.
 - Controles de autenticación, CORS y limitación de intentos de acceso.
 
-## Frontend
+## Instalación local en otra máquina
+
+Requisitos:
+
+- Git.
+- Python 3.12 o compatible.
+- Node.js y npm.
+- Acceso a la base MySQL definida en `backend\.env`.
+
+Clonar el proyecto:
 
 ```powershell
 git clone https://github.com/oscarvogel/registro_viajes_fgpy.git
-Set-Location registro_viajes_fgpy\frontend
-npm install --strict-ssl=false
-npm test
-npm run build
-npm run dev -- --host 127.0.0.1 --port 5173
+Set-Location registro_viajes_fgpy
 ```
 
-Si ya tenés el proyecto clonado, reemplazá los dos primeros comandos por entrar a la carpeta donde lo tengas guardado:
+Si ya tenés el proyecto clonado, entrá a la carpeta donde lo hayas guardado:
 
 ```powershell
-Set-Location <carpeta-donde-clonaste-el-repo>\frontend
+Set-Location <carpeta-donde-clonaste-el-repo>
 ```
-
-El `--strict-ssl=false` fue necesario en esta máquina por un problema local de certificados contra el registry de npm. Si tu npm funciona normal, podés usar simplemente `npm install`.
 
 ## Backend
 
-Antes de levantar el backend, crear `backend\.env` a partir de `backend\.env.example` y completar los valores reales fuera de Git.
+Antes de levantar el backend, crear `backend\.env` a partir de `backend\.env.example` y completar los valores reales fuera de Git:
 
 ```powershell
-Set-Location registro_viajes_fgpy
+Copy-Item backend\.env.example backend\.env
+notepad backend\.env
+```
+
+Instalar dependencias y verificar:
+
+```powershell
 py -m pip install -r backend\requirements.txt
 py -m pytest backend -q
 py -m py_compile backend\main.py backend\database.py backend\models.py backend\schemas.py
 ```
 
+Levantar el backend en una terminal:
+
+```powershell
+Set-Location registro_viajes_fgpy\backend
+py -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Chequeo rápido:
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:8000/api/admin/health
+```
+
+La API queda disponible en `http://127.0.0.1:8000/api`.
+
 No se deben guardar credenciales, claves JWT, conexiones de base de datos ni archivos `.env` reales en Git.
+
+## Frontend
+
+Instalar dependencias y verificar:
+
+```powershell
+Set-Location registro_viajes_fgpy\frontend
+npm install --strict-ssl=false
+npm test
+npm run build
+```
+
+Levantar el frontend en otra terminal:
+
+```powershell
+Set-Location registro_viajes_fgpy\frontend
+npm run dev -- --host 127.0.0.1 --port 5173
+```
+
+Abrir en el navegador:
+
+```text
+http://127.0.0.1:5173/
+```
+
+Por defecto el frontend usa `http://localhost:8000/api`. Si necesitás apuntarlo a otra API, crear `frontend\.env.local`:
+
+```powershell
+Set-Content frontend\.env.local "VITE_API_URL=http://127.0.0.1:8000/api"
+```
+
+El `--strict-ssl=false` fue necesario en esta máquina por un problema local de certificados contra el registry de npm. Si tu npm funciona normal, podés usar simplemente `npm install`.
 
 ## Verificación actual
 
