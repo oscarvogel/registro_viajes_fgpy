@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import tempfile
@@ -210,7 +211,8 @@ class ImageStorageTestCase(unittest.TestCase):
         saved = self.storage.save_temp(JPEG, "safe name.jpg", "image/jpeg")
         self.storage.promote(saved.token, NOW)
         receipt = self.root / "receipts" / f"{Path(saved.relative_path).stem}.json"
-        receipt.write_text(receipt.read_text(encoding="utf-8")[:-1] + "A", encoding="utf-8")
+        signed = receipt.read_text(encoding="utf-8")
+        receipt.write_text(signed[:-1] + ("B" if signed[-1] == "A" else "A"), encoding="utf-8")
         with self.assertRaises(ImageValidationError) as error:
             self.storage.promote(saved.token, NOW)
         self.assertNotIn(str(self.root), str(error.exception))
@@ -372,6 +374,29 @@ class ImageStorageTestCase(unittest.TestCase):
         self.assertEqual(count, 1)
         self.assertFalse((self.root / old.relative_path).exists())
         self.assertTrue((self.root / fresh.relative_path).exists())
+
+    def test_enumerates_and_deletes_only_valid_unchanged_promotions(self):
+        saved = self.storage.save_temp(JPEG, "orphan.jpg", "image/jpeg")
+        confirmed = self.storage.promote(saved.token, NOW)
+        scan = self.storage.enumerate_promotions()
+        self.assertEqual(scan.invalid_count, 0)
+        self.assertEqual(len(scan.promotions), 1)
+        promotion = scan.promotions[0]
+        self.assertEqual(promotion.relative_path, confirmed.relative_path)
+        self.assertEqual(promotion.token_hash, hashlib.sha256(saved.token.encode("ascii")).hexdigest())
+        self.assertTrue(self.storage.delete_orphaned_promotion(promotion))
+        self.assertFalse(self.storage.delete_orphaned_promotion(promotion))
+        self.assertFalse((self.root / confirmed.relative_path).exists())
+
+    def test_enumeration_skips_tampered_receipt_without_exposing_details(self):
+        saved = self.storage.save_temp(JPEG, "orphan.jpg", "image/jpeg")
+        confirmed = self.storage.promote(saved.token, NOW)
+        receipt = self.root / "receipts" / f"{Path(saved.relative_path).stem}.json"
+        receipt.write_text(receipt.read_text(encoding="ascii")[:-1] + "A", encoding="ascii")
+        scan = self.storage.enumerate_promotions()
+        self.assertEqual(scan.promotions, ())
+        self.assertEqual(scan.invalid_count, 1)
+        self.assertTrue((self.root / confirmed.relative_path).exists())
 
     def test_cleanup_continues_past_malformed_tampered_and_naive_metadata(self):
         expired = self.storage.save_temp(JPEG, "expired.jpg", "image/jpeg")

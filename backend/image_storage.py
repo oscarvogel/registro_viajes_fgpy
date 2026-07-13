@@ -86,6 +86,24 @@ class ConfirmedImage:
     expires_at: datetime
 
 
+@dataclass(frozen=True)
+class PromotionMetadata:
+    token_hash: str
+    relative_path: str
+    confirmed_at: datetime
+    expires_at: datetime
+    sha256: str
+    detected_mime: str
+    _upload_id: str
+    _signed_receipt: str
+
+
+@dataclass(frozen=True)
+class PromotionScan:
+    promotions: tuple[PromotionMetadata, ...]
+    invalid_count: int = 0
+
+
 _MIME_EXTENSIONS = {
     "image/jpeg": ".jpg",
     "image/png": ".png",
@@ -580,6 +598,98 @@ class ImageStorage:
             raise
         except (ImageStorageError, OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise ImageValidationError("Invalid promotion receipt") from exc
+
+    def _parse_promotion_receipt(self, receipt_path: Path, signed_receipt: str) -> PromotionMetadata:
+        try:
+            receipt = self._decode_signed(signed_receipt)
+            expected_keys = {
+                "kind", "id", "token_hash", "source_sha256", "source_size", "relative_path", "detected_mime",
+                "original_name", "confirmed_at", "expires_at", "retention_days",
+            }
+            if set(receipt) != expected_keys or receipt["kind"] != "promotion-receipt":
+                raise ImageValidationError("Invalid promotion receipt")
+            upload_id = receipt["id"]
+            if not isinstance(upload_id, str) or not re.fullmatch(r"[0-9a-f]{32}", upload_id):
+                raise ImageValidationError("Invalid promotion receipt")
+            if receipt_path != self._receipt_path(upload_id):
+                raise ImageValidationError("Invalid promotion receipt")
+            if not re.fullmatch(r"[0-9a-f]{64}", receipt["token_hash"]):
+                raise ImageValidationError("Invalid promotion receipt")
+            if not re.fullmatch(r"[0-9a-f]{64}", receipt["source_sha256"]):
+                raise ImageValidationError("Invalid promotion receipt")
+            mime = receipt["detected_mime"]
+            if mime not in _MIME_EXTENSIONS:
+                raise ImageValidationError("Invalid promotion receipt")
+            if not isinstance(receipt["source_size"], int) or isinstance(receipt["source_size"], bool) or not 0 < receipt["source_size"] <= self.max_bytes:
+                raise ImageValidationError("Invalid promotion receipt")
+            if receipt["original_name"] != self._sanitize_name(receipt["original_name"]):
+                raise ImageValidationError("Invalid promotion receipt")
+            if receipt["retention_days"] != 60 or isinstance(receipt["retention_days"], bool):
+                raise ImageValidationError("Invalid promotion receipt")
+            confirmed_at = datetime.fromisoformat(receipt["confirmed_at"])
+            expires_at = datetime.fromisoformat(receipt["expires_at"])
+            self._require_utc(confirmed_at, "Receipt confirmation time")
+            self._require_utc(expires_at, "Receipt expiry time")
+            if expires_at != confirmed_at + timedelta(days=60):
+                raise ImageValidationError("Invalid promotion receipt")
+            expected_relative = f"confirmed/{confirmed_at:%Y/%m}/{upload_id}{_MIME_EXTENSIONS[mime]}"
+            if receipt["relative_path"] != expected_relative:
+                raise ImageValidationError("Invalid promotion receipt")
+            image_path = self._safe_path(expected_relative, required_prefix="confirmed")
+            self._validate_confirmed_file(image_path, receipt["source_sha256"], mime)
+            if image_path.stat().st_size != receipt["source_size"]:
+                raise ImageValidationError("Invalid promotion receipt")
+            return PromotionMetadata(
+                receipt["token_hash"], expected_relative, confirmed_at, expires_at,
+                receipt["source_sha256"], mime, upload_id, signed_receipt,
+            )
+        except ImageValidationError:
+            raise
+        except (ImageStorageError, OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:
+            raise ImageValidationError("Invalid promotion receipt") from exc
+
+    def enumerate_promotions(self) -> PromotionScan:
+        receipts_root = self._safe_path("receipts", required_prefix="receipts")
+        if not receipts_root.exists():
+            return PromotionScan(())
+        promotions = []
+        invalid = 0
+        for receipt_path in receipts_root.glob("*.json"):
+            try:
+                if receipt_path.is_symlink() or not re.fullmatch(r"[0-9a-f]{32}\.json", receipt_path.name):
+                    raise ImageValidationError("Invalid promotion receipt")
+                self._assert_no_symlink_components(receipt_path, "receipts")
+                signed = receipt_path.read_text(encoding="ascii")
+                promotions.append(self._parse_promotion_receipt(receipt_path.resolve(), signed))
+            except (ImageStorageError, OSError, UnicodeError):
+                invalid += 1
+        return PromotionScan(tuple(promotions), invalid)
+
+    def delete_orphaned_promotion(self, promotion: PromotionMetadata) -> bool:
+        if not isinstance(promotion, PromotionMetadata):
+            raise ImageValidationError("Invalid promotion metadata")
+        with self._promotion_lock(promotion._upload_id):
+            receipt_path = self._receipt_path(promotion._upload_id)
+            if not receipt_path.is_file():
+                return False
+            try:
+                signed = receipt_path.read_text(encoding="ascii")
+            except (OSError, UnicodeError) as exc:
+                raise ImageStoragePathError("Promotion receipt cannot be read") from exc
+            if not hmac.compare_digest(signed, promotion._signed_receipt):
+                return False
+            current = self._parse_promotion_receipt(receipt_path.resolve(), signed)
+            if current != promotion:
+                return False
+            image_path = self._safe_path(promotion.relative_path, required_prefix="confirmed")
+            try:
+                image_path.unlink(missing_ok=True)
+                receipt_path.unlink(missing_ok=True)
+                self._sync_directory(image_path.parent)
+                self._sync_directory(receipt_path.parent)
+                return True
+            except OSError as exc:
+                raise ImageStoragePathError("Orphan promotion could not be deleted") from exc
 
     def _best_effort_remove_temp(self, source: Path) -> None:
         metadata_path = source.with_suffix(source.suffix + ".json")
