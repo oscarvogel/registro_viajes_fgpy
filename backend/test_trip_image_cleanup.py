@@ -67,6 +67,20 @@ class TripImageCleanupTests(unittest.TestCase):
         self.assertIsNone(db.get(models.ViajeImagen, second_id))
         self.storage.delete_confirmed = real_delete
 
+    def test_stale_expired_row_path_never_deletes_another_promotion(self):
+        db = self.Session()
+        first, first_file = self.add_evidence(db)
+        second, second_file = self.add_evidence(
+            db, confirmed_at=NOW - timedelta(days=2), expires_at=NOW + timedelta(days=58)
+        )
+        first.storage_path = second.storage_path
+        db.commit()
+        result = cleanup_trip_images(db, self.storage, NOW)
+        self.assertIn("expired_metadata_mismatch", result.errors)
+        self.assertIsNotNone(db.get(models.ViajeImagen, first.id))
+        self.assertTrue((self.root / first_file.relative_path).exists())
+        self.assertTrue((self.root / second_file.relative_path).exists())
+
     def test_old_orphan_deleted_recent_and_db_backed_retained(self):
         db = self.Session()
         old = self.storage.promote(self.storage.save_temp(JPEG, "old.jpg", "image/jpeg").token, NOW - timedelta(days=2))
@@ -131,6 +145,29 @@ class TripImageCleanupTests(unittest.TestCase):
         result = cleanup_trip_images(db, self.storage, NOW)
         self.assertEqual(result.orphan_deleted, 0)
         self.assertTrue((self.root / promoted.relative_path).exists())
+
+    def test_mysql_read_committed_skips_orphan_deletion(self):
+        promoted = self.storage.promote(self.storage.save_temp(JPEG, "old.jpg", "image/jpeg").token, NOW - timedelta(days=2))
+        db = Mock()
+        db.get_bind.return_value.dialect.name = "mysql"
+        db.connection.return_value.get_isolation_level.return_value = "READ COMMITTED"
+        candidates = Mock(); candidates.filter.return_value.all.return_value = []
+        db.query.return_value = candidates
+        result = cleanup_trip_images(db, self.storage, NOW)
+        self.assertIn("orphan_isolation_unsafe", result.errors)
+        self.assertEqual(result.orphan_deleted, 0)
+        self.assertTrue((self.root / promoted.relative_path).exists())
+
+    def test_mysql_repeatable_read_allows_locked_orphan_delete(self):
+        promoted = self.storage.promote(self.storage.save_temp(JPEG, "old.jpg", "image/jpeg").token, NOW - timedelta(days=2))
+        candidate_query = Mock(); candidate_query.filter.return_value.all.return_value = []
+        orphan_query = Mock(); orphan_query.filter.return_value.with_for_update.return_value.first.return_value = None
+        db = Mock(); db.query.side_effect = [candidate_query, orphan_query]
+        db.get_bind.return_value.dialect.name = "mysql"
+        db.connection.return_value.get_isolation_level.return_value = "REPEATABLE READ"
+        result = cleanup_trip_images(db, self.storage, NOW)
+        self.assertEqual(result.orphan_deleted, 1)
+        self.assertFalse((self.root / promoted.relative_path).exists())
 
 
 class SchedulerCleanupTests(unittest.TestCase):

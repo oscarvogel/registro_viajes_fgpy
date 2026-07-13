@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from sqlalchemy import text
 from models import ViajeImagen
 from image_storage import ImageStoragePathError
 
@@ -18,8 +19,9 @@ class TripImageCleanupResult:
 def cleanup_trip_images(db, storage, now: datetime, orphan_grace: timedelta = timedelta(hours=24)) -> TripImageCleanupResult:
     """Clean evidence under filesystem and database locks.
 
-    Orphan safety relies on MySQL/InnoDB locking the unique ``token_hash`` row
-    or its unique-index gap for ``SELECT ... FOR UPDATE`` until commit.
+    On MySQL, orphan safety requires confirmed REPEATABLE READ or SERIALIZABLE
+    isolation so InnoDB locks the unique ``token_hash`` row/index gap. SQLite
+    uses BEGIN IMMEDIATE before the absent-token check to exclude writers.
     """
     if now.tzinfo is None or now.utcoffset() != timedelta(0):
         raise ValueError("now must be timezone-aware UTC")
@@ -45,6 +47,7 @@ def _cleanup_locked(db, storage, now: datetime, orphan_grace: timedelta) -> Trip
         candidate_ids = [value[0] for value in db.query(ViajeImagen.id).filter(
             ViajeImagen.expires_at <= now.replace(tzinfo=None)
         ).all()]
+        db.rollback()
     except Exception:
         errors.append("database_query")
         candidate_ids = []
@@ -73,6 +76,16 @@ def _cleanup_locked(db, storage, now: datetime, orphan_grace: timedelta) -> Trip
             continue
         evidence_token_hash = evidence.token_hash
         evidence_storage_path = evidence.storage_path
+        promotion = promotions_by_token.get(evidence_token_hash)
+        if (
+            promotion is None
+            or evidence_storage_path != promotion.relative_path
+            or evidence.sha256 != promotion.sha256
+            or evidence.mime_type != promotion.detected_mime
+        ):
+            db.rollback()
+            errors.append("expired_metadata_mismatch")
+            continue
         try:
             storage.delete_confirmed(evidence_storage_path)
         except Exception:
@@ -99,12 +112,32 @@ def _cleanup_locked(db, storage, now: datetime, orphan_grace: timedelta) -> Trip
             errors.append("expired_database_delete")
 
     if db_available and scan is not None:
+        try:
+            dialect = db.get_bind().dialect.name
+            if dialect == "mysql":
+                isolation = str(db.connection().get_isolation_level()).upper().replace("_", " ")
+                orphan_isolation_safe = isolation in {"REPEATABLE READ", "SERIALIZABLE"} and bool(
+                    ViajeImagen.token_hash.property.columns[0].unique
+                )
+            elif dialect == "sqlite":
+                orphan_isolation_safe = True
+            else:
+                orphan_isolation_safe = False
+        except Exception:
+            orphan_isolation_safe = False
+        if not orphan_isolation_safe and scan.promotions:
+            errors.append("orphan_isolation_unsafe")
         for promotion in scan.promotions:
             if promotion.token_hash in expired_tokens_deleted:
                 continue
             if promotion.confirmed_at > now - orphan_grace:
                 continue
+            if not orphan_isolation_safe:
+                continue
             try:
+                if dialect == "sqlite":
+                    db.rollback()
+                    db.execute(text("BEGIN IMMEDIATE"))
                 exists = db.query(ViajeImagen.id).filter(
                     ViajeImagen.token_hash == promotion.token_hash
                 ).with_for_update().first() is not None
