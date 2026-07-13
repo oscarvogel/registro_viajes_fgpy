@@ -201,6 +201,33 @@ class ImageStorageTestCase(unittest.TestCase):
         self.assertFalse(source.exists())
         self.assertFalse(source.with_suffix(source.suffix + ".json").exists())
 
+    def test_committed_promotion_ignores_temp_unlink_failures(self):
+        saved = self.storage.save_temp(JPEG, "safe.jpg", "image/jpeg")
+        source = self.root / saved.relative_path
+        original_unlink = Path.unlink
+
+        def fail_temp_unlink(path, *args, **kwargs):
+            if path == source or path == source.with_suffix(source.suffix + ".json"):
+                raise PermissionError("injected unlink failure")
+            return original_unlink(path, *args, **kwargs)
+
+        with patch("backend.image_storage.Path.unlink", autospec=True, side_effect=fail_temp_unlink):
+            first = self.storage.promote(saved.token, NOW)
+        second = self.storage.promote(saved.token, NOW)
+        self.assertEqual(first, second)
+
+    def test_receipt_retry_ignores_corrupt_or_oversized_temp_residue(self):
+        for residue in (b"corrupt", JPEG + b"x" * 2048):
+            with self.subTest(size=len(residue)), tempfile.TemporaryDirectory() as directory:
+                storage = ImageStorage(root=Path(directory).resolve(), token_secret=SECRET, max_bytes=1024, now=lambda: NOW)
+                saved = storage.save_temp(JPEG, "safe.jpg", "image/jpeg")
+                confirmed = storage.promote(saved.token, NOW)
+                source = storage.root / saved.relative_path
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_bytes(residue)
+                self.assertEqual(storage.promote(saved.token, NOW), confirmed)
+                self.assertTrue(source.exists())
+
     def test_idempotent_retry_rejects_semantically_tampered_receipt_fields(self):
         fields = {
             "id": "f" * 32,
@@ -351,10 +378,24 @@ class ImageStorageTestCase(unittest.TestCase):
                     with self.assertRaises(ImageStoragePathError):
                         self.storage._namespace_root(namespace)
 
-    def test_exclusive_publication_falls_back_when_hard_links_unavailable(self):
+    def test_exclusive_publication_fails_closed_when_hard_links_unavailable(self):
+        saved = self.storage.save_temp(JPEG, "x.jpg", "image/jpeg")
+        destination = self.root / "confirmed/2026/07" / Path(saved.relative_path).name
+        receipt = self.root / "receipts" / f"{Path(saved.relative_path).stem}.json"
         with patch("backend.image_storage.os.link", side_effect=OSError("unsupported")):
-            saved = self.storage.save_temp(JPEG, "x.jpg", "image/jpeg")
-        self.assertEqual((self.root / saved.relative_path).read_bytes(), JPEG)
+            with self.assertRaises(ImageStoragePathError) as error:
+                self.storage.promote(saved.token, NOW)
+        self.assertNotIn("unsupported", str(error.exception))
+        self.assertFalse(destination.exists())
+        self.assertFalse(receipt.exists())
+        self.assertFalse(list(destination.parent.glob("*.part")) if destination.parent.exists() else [])
+
+    def test_exclusive_staging_write_failure_leaves_no_authoritative_file(self):
+        destination = self.root / "confirmed/2026/07" / (("d" * 32) + ".jpg")
+        with patch("backend.image_storage.os.fsync", side_effect=OSError("write failed")):
+            with self.assertRaises(ImageStoragePathError):
+                self.storage._write_exclusive(destination, JPEG)
+        self.assertFalse(destination.exists())
 
     def test_mutating_clock_is_validated_on_every_use(self):
         values = iter((NOW, datetime(2026, 7, 13, 12, 1)))

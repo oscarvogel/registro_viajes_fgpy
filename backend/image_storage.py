@@ -2,6 +2,8 @@
 
 The configured root must be service-owned and not writable by untrusted local
 users. Portable Python cannot eliminate every filesystem TOCTOU on Windows.
+Directory fsync calls are best-effort portability aids, not a cross-platform
+durability guarantee.
 """
 
 from __future__ import annotations
@@ -364,6 +366,7 @@ class ImageStorage:
             raise ImageStoragePathError("Unable to reserve an image staging path") from exc
         except OSError as exc:
             raise ImageStoragePathError("Unable to reserve an image path") from exc
+        published = False
         try:
             with os.fdopen(descriptor, "wb") as output:
                 output.write(data)
@@ -371,31 +374,22 @@ class ImageStorage:
                 os.fsync(output.fileno())
             try:
                 os.link(staging, path)
+                published = True
             except FileExistsError as exc:
                 raise ImageStoragePathError("Generated image path already exists") from exc
             except OSError as exc:
-                descriptor = None
-                try:
-                    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                    with os.fdopen(descriptor, "wb") as output, open(staging, "rb") as source:
-                        descriptor = None
-                        while chunk := source.read(64 * 1024):
-                            output.write(chunk)
-                        output.flush()
-                        os.fsync(output.fileno())
-                except FileExistsError as fallback_exc:
-                    raise ImageStoragePathError("Generated image path already exists") from fallback_exc
-                except OSError as fallback_exc:
-                    path.unlink(missing_ok=True)
-                    raise ImageStoragePathError("Unable to publish image data") from fallback_exc
-                finally:
-                    if descriptor is not None:
-                        os.close(descriptor)
+                raise ImageStoragePathError("Atomic image publication is unavailable") from exc
             cls._sync_directory(path.parent)
-        except Exception:
+        except ImageStorageError:
             raise
+        except OSError as exc:
+            raise ImageStoragePathError("Unable to write image staging data") from exc
         finally:
-            staging.unlink(missing_ok=True)
+            try:
+                staging.unlink(missing_ok=True)
+            except OSError:
+                if published:
+                    pass
 
     @classmethod
     def _write_json_exclusive(cls, path: Path, value: dict) -> None:
@@ -567,6 +561,20 @@ class ImageStorage:
         except (ImageStorageError, OSError, ValueError, TypeError, KeyError, UnicodeError) as exc:
             raise ImageValidationError("Invalid promotion receipt") from exc
 
+    def _best_effort_remove_temp(self, source: Path) -> None:
+        metadata_path = source.with_suffix(source.suffix + ".json")
+        try:
+            self._assert_no_symlink_components(source.parent, "tmp")
+            source.unlink(missing_ok=True)
+        except (ImageStorageError, OSError):
+            pass
+        try:
+            self._assert_no_symlink_components(metadata_path.parent, "tmp")
+            metadata_path.unlink(missing_ok=True)
+        except (ImageStorageError, OSError):
+            pass
+        self._sync_directory(source.parent)
+
     def promote(self, token: str, confirmed_at: datetime, retention_days: int = 60) -> ConfirmedImage:
         confirmed_at = self._require_utc(confirmed_at, "Confirmation time")
         if isinstance(retention_days, bool) or not isinstance(retention_days, int) or retention_days != 60:
@@ -577,22 +585,15 @@ class ImageStorage:
             if receipt_path.is_file():
                 confirmed = self._load_receipt(receipt_path, token, payload)
                 source = self._safe_path(payload["path"], required_prefix="tmp")
-                metadata_path = source.with_suffix(source.suffix + ".json")
                 if source.exists():
-                    digest, mime, size = self._inspect_file(source, "tmp")
-                    if digest != payload["sha256"] or mime != payload["mime"] or size != payload["size"]:
-                        raise ImageValidationError("Crash residue integrity check failed")
                     try:
-                        self._assert_no_symlink_components(source, "tmp")
-                        source.unlink(missing_ok=True)
-                    except OSError:
+                        digest, mime, size = self._inspect_file(source, "tmp")
+                        if digest == payload["sha256"] and mime == payload["mime"] and size == payload["size"]:
+                            self._best_effort_remove_temp(source)
+                    except ImageStorageError:
                         pass
-                try:
-                    self._assert_no_symlink_components(metadata_path.parent, "tmp")
-                    metadata_path.unlink(missing_ok=True)
-                    self._sync_directory(source.parent)
-                except (ImageStorageError, OSError):
-                    pass
+                else:
+                    self._best_effort_remove_temp(source)
                 return confirmed
             source_ref = self.resolve_temp(token)
             source_data = self._read_bounded_file(source_ref.path, "tmp")
@@ -616,13 +617,11 @@ class ImageStorage:
             }
             try:
                 self._write_exclusive(receipt_path, self._sign_payload(receipt).encode("ascii"))
-                source_ref.path.unlink(missing_ok=True)
-                source_ref.path.with_suffix(source_ref.path.suffix + ".json").unlink(missing_ok=True)
-                self._sync_directory(source_ref.path.parent)
             except ImageStorageError:
                 raise
             except OSError as exc:
                 raise ImageStoragePathError("Image promotion could not be completed") from exc
+            self._best_effort_remove_temp(source_ref.path)
             return confirmed
 
     def resolve_confirmed(self, relative_path: str) -> Path:
