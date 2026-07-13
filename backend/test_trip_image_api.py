@@ -8,6 +8,7 @@ from unittest.mock import patch
 import tempfile
 
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -366,6 +367,30 @@ if __name__ == "__main__":
 
 
 class TripImageEndpointServiceTest(unittest.TestCase):
+    def make_confirm_fixture(self):
+        from image_storage import ImageStorage
+        import models, schemas
+        root = tempfile.TemporaryDirectory(); self.addCleanup(root.cleanup)
+        storage = ImageStorage(Path(root.name).resolve(), "x" * 32)
+        engine = create_engine("sqlite:///:memory:")
+        for table in (models.Empleado.__table__, models.Proveedor.__table__, models.Equipo.__table__, models.UnidadNegocio.__table__, models.TableroProduccion.__table__, models.ViajeImagen.__table__):
+            table.create(engine)
+        db = sessionmaker(bind=engine)()
+        user = models.Empleado(id=10, nombre="Ana", apellido="Perez", email="a@x", documento="1", fecha_contratacion=date(2020,1,1), activo=True, porcentaje=0)
+        db.add_all([
+            user, models.Proveedor(id=20, razon_social="Alcogreen", activo=True),
+            models.UnidadNegocio(id=3, descripcion="Transporte", activo=True),
+            models.Equipo(id=30, descripcion="Camion", patente="ABC123", nro_chasis="c", nro_motor="m", tipo_movil_id=1, activo=True, movil_asociado=0, ult_hr_km=0),
+        ]); db.commit()
+        saved = storage.save_temp(b"\xff\xd8\xffdata", "ticket.jpg", "image/jpeg")
+        request = schemas.TripImageConfirmRequest(
+            upload_token=saved.token, fecha_remision=date(2026,7,13), fecha_recepcion=date(2026,7,13),
+            numero_remision_fpv="002-003-0003677", proveedor_id=20, patente="ABC123",
+            unidad_negocio_id=3, peso_bruto_destino=49.690, tara_destino=17.080,
+            neto_destino=32.610, observaciones="revisado",
+        )
+        return db, storage, user, request
+
     def test_analysis_saves_bounded_image_normalizes_and_matches_unique_provider(self):
         from image_storage import ImageStorage
         from trip_image_service import TripImageService
@@ -394,10 +419,88 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         self.assertEqual(result["proposal"]["numero_remision_fpv"], "002-003-0003677")
         self.assertEqual(result["proposal"]["neto_destino"], Decimal("32.610"))
         self.assertEqual(result["proposal"]["patente_observada"], "ABC123")
+        db.add(models.Proveedor(id=8, razon_social="Alcogreen SA", activo=True)); db.commit()
+        ambiguous = TripImageService(db, storage, vision).analyze(b"\xff\xd8\xffmore", "a.jpg", "image/jpeg")
+        self.assertIsNone(ambiguous["proposal"]["proveedor_id"])
+        self.assertTrue(any("coincidencia activa unica" in item for item in ambiguous["proposal"]["warnings"]))
+        db.query(models.Proveedor).delete(); db.commit()
+        missing = TripImageService(db, storage, vision).analyze(b"\xff\xd8\xfflast", "b.jpg", "image/jpeg")
+        self.assertIsNone(missing["proposal"]["proveedor_id"])
 
     def test_confirm_schema_does_not_accept_identity_fields(self):
         from schemas import TripImageConfirmRequest
-        fields = set(TripImageConfirmRequest.model_fields)
-        self.assertNotIn("chofer_id", fields)
-        self.assertNotIn("cliente_id", fields)
-        self.assertNotIn("pesaje_unico", fields)
+        with self.assertRaises(ValueError):
+            TripImageConfirmRequest(
+                upload_token="x", fecha_remision=date(2026,7,13), fecha_recepcion=date(2026,7,13),
+                numero_remision_fpv="002-003-0003677", proveedor_id=1, patente="ABC",
+                unidad_negocio_id=1, peso_bruto_destino=2, tara_destino=1,
+                neto_destino=1, chofer_id=999,
+            )
+
+    def test_confirm_uses_current_user_and_is_idempotent(self):
+        from trip_image_service import TripImageService
+        import models
+        db, storage, user, request = self.make_confirm_fixture()
+        service = TripImageService(db, storage, object())
+        first = service.confirm(request, user)
+        second = service.confirm(request, user)
+        self.assertEqual(first, second)
+        trip = db.get(models.TableroProduccion, first["viaje_id"])
+        self.assertEqual(trip.empleado_id, user.id)
+        self.assertIsNone(trip.cliente_id)
+        self.assertEqual(trip.neto_origen, Decimal("0.00"))
+        self.assertEqual(db.query(models.ViajeImagen).count(), 1)
+
+    def test_commit_failure_compensates_and_retry_succeeds(self):
+        from trip_image_service import TripImageService
+        import models
+        from sqlalchemy.exc import SQLAlchemyError
+        db, storage, user, request = self.make_confirm_fixture()
+        service = TripImageService(db, storage, object())
+        with patch.object(db, "commit", side_effect=SQLAlchemyError("secret")):
+            with self.assertRaises(SQLAlchemyError):
+                service.confirm(request, user)
+        self.assertEqual(db.query(models.TableroProduccion).count(), 0)
+        self.assertEqual(db.query(models.ViajeImagen).count(), 0)
+        self.assertTrue(storage.resolve_temp(request.upload_token).path.is_file())
+        result = service.confirm(request, user)
+        self.assertIsNotNone(result["imagen_id"])
+
+    def test_all_image_routes_require_authentication(self):
+        sentry_sdk = types.ModuleType("sentry_sdk"); sentry_sdk.init = lambda *a, **k: None
+        sys.modules.setdefault("sentry_sdk", sentry_sdk)
+        sys.modules.setdefault("sentry_sdk.integrations", types.ModuleType("sentry_sdk.integrations"))
+        for suffix, class_name in (("logging","LoggingIntegration"),("starlette","StarletteIntegration"),("fastapi","FastApiIntegration")):
+            module = types.ModuleType(f"sentry_sdk.integrations.{suffix}")
+            setattr(module, class_name, type(class_name, (), {"__init__": lambda self,*a,**k: None}))
+            sys.modules.setdefault(f"sentry_sdk.integrations.{suffix}", module)
+        import main
+        client = TestClient(main.app)
+        analyze = client.post("/api/registro-viaje/imagen/analizar", files={"file": ("x.jpg", b"\xff\xd8\xffx", "image/jpeg")})
+        confirm = client.post("/api/registro-viaje/imagen/confirmar", json={
+            "upload_token":"x", "fecha_remision":"2026-07-13", "fecha_recepcion":"2026-07-13",
+            "numero_remision_fpv":"002-003-0003677", "proveedor_id":1, "patente":"ABC",
+            "unidad_negocio_id":1, "peso_bruto_destino":2, "tara_destino":1, "neto_destino":1,
+        })
+        image = client.get("/api/registro-viaje/imagenes/1")
+        self.assertEqual([analyze.status_code, confirm.status_code, image.status_code], [401, 401, 401])
+
+    def test_image_route_enforces_owner_and_private_response(self):
+        import main, models
+        db, storage, user, request = self.make_confirm_fixture()
+        result = __import__("trip_image_service").TripImageService(db, storage, object()).confirm(request, user)
+        with patch("main.get_trip_image_storage", return_value=storage), patch("main.clear_request_context") as clear:
+            response = main.get_trip_image(result["imagen_id"], db, user)
+        self.assertEqual(Path(response.path).read_bytes(), b"\xff\xd8\xffdata")
+        self.assertEqual(response.media_type, "image/jpeg")
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
+        self.assertIn("ticket.jpg", response.headers["content-disposition"])
+        clear.assert_called_once_with()
+        other = models.Empleado(id=99, nombre="B", apellido="C", email="b@x", documento="2", fecha_contratacion=date(2020,1,1), activo=True, porcentaje=0)
+        db.add(other); db.commit()
+        with self.assertRaises(HTTPException) as denied:
+            main.get_trip_image(result["imagen_id"], db, other)
+        self.assertEqual(denied.exception.status_code, 403)
+        with self.assertRaises(HTTPException) as missing:
+            main.get_trip_image(999, db, user)
+        self.assertEqual(missing.exception.status_code, 404)

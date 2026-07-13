@@ -12,6 +12,7 @@ from backend.minimax_vision import (
     MiniMaxVisionClient,
     MiniMaxVisionConfigurationError,
     MiniMaxVisionError,
+    MiniMaxVisionTimeoutError,
     _SubprocessExecutor,
     _argv,
 )
@@ -146,6 +147,12 @@ class MiniMaxVisionClientTests(unittest.TestCase):
                     self.client(FakeExecutor(error=error)).analyze(self.image)
                 self.assertNotIn("top-secret", str(caught.exception))
                 self.assertNotIn("top-secret", repr(caught.exception.__cause__))
+
+    def test_executor_timeout_has_explicit_sanitized_type(self):
+        with self.assertRaises(MiniMaxVisionTimeoutError) as caught:
+            self.client(FakeExecutor(error=TimeoutError("top-secret timeout"))).analyze(self.image)
+        self.assertNotIn("top-secret", str(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
 
     def test_executor_domain_error_is_recreated_without_foreign_secret(self):
         foreign = MiniMaxVisionError("MINIMAX_API_KEY=top-secret raw response")

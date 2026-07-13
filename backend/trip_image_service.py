@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 
 import models
 import schemas
-from image_storage import ImageStorage, ImageTokenError
+from image_storage import ImageStorage
 from trip_image_normalization import normalize_extraction, normalize_provider_name
 from trip_service import create_trip
 
@@ -52,7 +52,9 @@ class TripImageService:
             if existing.viaje.empleado_id != current_user.id:
                 raise HTTPException(403, "Evidencia perteneciente a otro usuario")
             return {"viaje_id": existing.viaje_id, "imagen_id": existing.id}
+        promoted = None
         try:
+            token = self.storage.describe_token(request.upload_token)
             registro = schemas.RegistroViajeCreate(
                 fecha_remision=request.fecha_remision, fecha_recepcion=request.fecha_recepcion,
                 proveedor_id=request.proveedor_id, numero_remision="",
@@ -65,23 +67,41 @@ class TripImageService:
                 observaciones=request.observaciones,
             )
             trip = create_trip(self.db, registro, current_user, commit=False)
-            confirmed = self.storage.promote(request.upload_token, datetime.now(timezone.utc))
-            payload = self.storage._verify_token(request.upload_token)
             image = models.ViajeImagen(
-                viaje_id=trip.id, storage_path=confirmed.relative_path,
-                original_name=payload["name"], mime_type=confirmed.detected_mime,
-                sha256=confirmed.sha256, token_hash=token_hash,
-                created_at=confirmed.confirmed_at.replace(tzinfo=None),
-                expires_at=confirmed.expires_at.replace(tzinfo=None),
+                viaje_id=trip.id, storage_path="pending",
+                original_name=token.original_name, mime_type=token.detected_mime,
+                sha256=token.sha256, token_hash=token_hash,
+                created_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                expires_at=token.expires_at.replace(tzinfo=None),
             )
-            self.db.add(image); self.db.commit(); self.db.refresh(image)
+            self.db.add(image)
+            self.db.flush()
+            promoted = self.storage.promote(request.upload_token, datetime.now(timezone.utc))
+            image.storage_path = promoted.relative_path
+            image.mime_type = promoted.detected_mime
+            image.sha256 = promoted.sha256
+            image.created_at = promoted.confirmed_at.replace(tzinfo=None)
+            image.expires_at = promoted.expires_at.replace(tzinfo=None)
+            self.db.commit(); self.db.refresh(image)
             return {"viaje_id": trip.id, "imagen_id": image.id}
         except IntegrityError:
-            self.db.rollback()
+            if promoted is not None:
+                try:
+                    self.storage.revert_promotion(request.upload_token, promoted)
+                finally:
+                    self.db.rollback()
+            else:
+                self.db.rollback()
             existing = self.db.query(models.ViajeImagen).filter(models.ViajeImagen.token_hash == token_hash).first()
-            if existing and existing.viaje.empleado_id == current_user.id:
+            if existing:
+                if existing.viaje.empleado_id != current_user.id:
+                    raise HTTPException(403, "Evidencia perteneciente a otro usuario")
                 return {"viaje_id": existing.viaje_id, "imagen_id": existing.id}
-            raise HTTPException(409, "La imagen ya fue confirmada")
+            raise HTTPException(409, "Conflicto al guardar el viaje")
         except Exception:
-            self.db.rollback()
+            try:
+                if promoted is not None:
+                    self.storage.revert_promotion(request.upload_token, promoted)
+            finally:
+                self.db.rollback()
             raise

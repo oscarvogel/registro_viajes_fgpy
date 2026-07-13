@@ -23,6 +23,10 @@ class MiniMaxVisionConfigurationError(MiniMaxVisionError):
     """MiniMax Vision is not configured correctly."""
 
 
+class MiniMaxVisionTimeoutError(MiniMaxVisionError):
+    """The provider execution exceeded its configured deadline."""
+
+
 PROMPT = """Analiza la imagen para precargar un viaje. Devuelve EXCLUSIVAMENTE un unico objeto JSON,
 sin prosa ni markdown, con estas claves exactas: fecha_remision; remito_tipo; remito_sucursal;
 remito_numero; proveedor_candidato; peso_bruto; tara; neto; unidad_peso; patente_observada;
@@ -268,6 +272,7 @@ class MiniMaxVisionClient:
         except (TypeError, ValueError, MiniMaxVisionConfigurationError):
             raise MiniMaxVisionConfigurationError("Configuracion MiniMax Vision invalida") from None
         failure = None
+        timed_out = False
         response = None
         try:
             env = os.environ.copy()
@@ -280,11 +285,14 @@ class MiniMaxVisionClient:
             failure = "No se pudo ejecutar MiniMax Vision"
         except TimeoutError:
             failure = "MiniMax Vision excedio el tiempo limite"
+            timed_out = True
         except OverflowError:
             failure = "MiniMax Vision excedio el limite de salida"
         except Exception:
             failure = "Fallo la comunicacion con MiniMax Vision"
         if failure is not None:
+            if timed_out:
+                raise MiniMaxVisionTimeoutError(failure)
             raise MiniMaxVisionError(failure)
         return _parse_response(response)
 
