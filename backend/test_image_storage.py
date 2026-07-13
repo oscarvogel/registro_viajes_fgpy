@@ -3,10 +3,13 @@ import json
 import os
 import tempfile
 import concurrent.futures
+import time
+import stat
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+from types import SimpleNamespace
 
 from backend.image_storage import (
     ImageStorage,
@@ -139,6 +142,13 @@ class ImageStorageTestCase(unittest.TestCase):
         self.assertFalse((self.root / saved.relative_path).exists())
         self.assertEqual(len(list((self.root / "confirmed").rglob("*.webp"))), 1)
 
+    def test_retention_is_fixed_to_exactly_sixty_days(self):
+        for invalid in (True, 1, 61):
+            with self.subTest(invalid=invalid):
+                saved = self.storage.save_temp(JPEG, "x.jpg", "image/jpeg")
+                with self.assertRaises(ImageValidationError):
+                    self.storage.promote(saved.token, NOW, retention_days=invalid)
+
     def test_idempotent_retry_rejects_tampered_signed_receipt(self):
         saved = self.storage.save_temp(JPEG, "safe name.jpg", "image/jpeg")
         self.storage.promote(saved.token, NOW)
@@ -154,6 +164,42 @@ class ImageStorageTestCase(unittest.TestCase):
         (self.root / confirmed.relative_path).write_bytes(JPEG)
         with self.assertRaises(ImageValidationError):
             self.storage.promote(saved.token, NOW)
+
+    def test_revalidation_rejects_files_larger_than_configured_limit(self):
+        temporary = self.storage.save_temp(JPEG, "temp.jpg", "image/jpeg")
+        (self.root / temporary.relative_path).write_bytes(JPEG + b"x" * 2048)
+        with self.assertRaises(ImageValidationError):
+            self.storage.resolve_temp(temporary.token)
+        confirmed_temp = self.storage.save_temp(PNG, "confirmed.png", "image/png")
+        confirmed = self.storage.promote(confirmed_temp.token, NOW)
+        (self.root / confirmed.relative_path).write_bytes(PNG + b"x" * 2048)
+        with self.assertRaises(ImageValidationError):
+            self.storage.promote(confirmed_temp.token, NOW)
+
+    def test_streaming_inspection_rejects_size_change_during_read(self):
+        saved = self.storage.save_temp(JPEG, "x.jpg", "image/jpeg")
+        path = self.root / saved.relative_path
+        with patch.object(self.storage, "_assert_no_symlink_components"), patch(
+            "backend.image_storage.os.lstat",
+            side_effect=(SimpleNamespace(st_size=len(JPEG)), SimpleNamespace(st_size=len(JPEG) + 1)),
+        ):
+            with self.assertRaises(ImageValidationError):
+                self.storage._inspect_file(path, "tmp")
+
+    def test_receipt_retry_removes_crash_left_temp_artifacts(self):
+        saved = self.storage.save_temp(JPEG, "safe.jpg", "image/jpeg")
+        confirmed = self.storage.promote(saved.token, NOW)
+        source = self.root / saved.relative_path
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes((self.root / confirmed.relative_path).read_bytes())
+        metadata = {
+            "kind": "temp-metadata", "id": source.stem, "path": saved.relative_path,
+            "expires_at": saved.expires_at.isoformat(), "sha256": saved.sha256, "mime": saved.detected_mime,
+        }
+        source.with_suffix(source.suffix + ".json").write_text(self.storage._sign_payload(metadata), encoding="ascii")
+        self.assertEqual(self.storage.promote(saved.token, NOW), confirmed)
+        self.assertFalse(source.exists())
+        self.assertFalse(source.with_suffix(source.suffix + ".json").exists())
 
     def test_idempotent_retry_rejects_semantically_tampered_receipt_fields(self):
         fields = {
@@ -188,6 +234,15 @@ class ImageStorageTestCase(unittest.TestCase):
         self.assertEqual(results[0], results[1])
         self.assertEqual(len(list((self.root / "confirmed").rglob("*.webp"))), 1)
         self.assertEqual(len(list((self.root / "receipts").glob("*.json"))), 1)
+
+    def test_wedged_promotion_lock_times_out_with_domain_error(self):
+        storage = ImageStorage(root=self.root, token_secret=SECRET, now=lambda: NOW, lock_timeout_seconds=0.02)
+        saved = storage.save_temp(JPEG, "x.jpg", "image/jpeg")
+        started = time.monotonic()
+        with patch.object(storage, "_try_acquire_lock", return_value=False):
+            with self.assertRaises(ImageStoragePathError):
+                storage.promote(saved.token, NOW)
+        self.assertLess(time.monotonic() - started, 1)
 
     def test_promote_does_not_overwrite_preexisting_destination_mismatch(self):
         saved = self.storage.save_temp(JPEG, "safe.jpg", "image/jpeg")
@@ -252,8 +307,77 @@ class ImageStorageTestCase(unittest.TestCase):
         self.assertTrue((self.root / naive.relative_path).exists())
         self.assertTrue((self.root / confirmed.relative_path).exists())
 
+    def test_cleanup_sweeps_only_aged_unambiguous_orphans_and_parts(self):
+        tmp = self.root / "tmp/20260710"
+        tmp.mkdir(parents=True)
+        old_image = tmp / (("a" * 32) + ".jpg")
+        recent_image = tmp / (("b" * 32) + ".png")
+        old_part = tmp / ".write.part"
+        recent_part = tmp / ".recent.part"
+        orphan_meta = tmp / (("c" * 32) + ".webp.json")
+        for path, data in ((old_image, JPEG), (recent_image, PNG), (old_part, b"partial"), (recent_part, b"partial"), (orphan_meta, b"invalid")):
+            path.write_bytes(data)
+        old_timestamp = (NOW - timedelta(days=2)).timestamp()
+        for path in (old_image, old_part, orphan_meta):
+            os.utime(path, (old_timestamp, old_timestamp))
+        self.storage.cleanup_expired_temps(NOW)
+        self.assertFalse(old_image.exists())
+        self.assertFalse(old_part.exists())
+        self.assertFalse(orphan_meta.exists())
+        self.assertTrue(recent_image.exists())
+        self.assertTrue(recent_part.exists())
+
+    def test_namespace_containment_rejects_cross_namespace_resolution(self):
+        with patch.object(self.storage, "_namespace_root", return_value=(self.root / "tmp").resolve()):
+            with self.assertRaises(ImageStoragePathError):
+                self.storage._safe_path("confirmed/" + ("a" * 32) + ".jpg", required_prefix="confirmed")
+
+    def test_namespace_root_symlink_is_rejected_without_os_privileges(self):
+        original_lstat = os.lstat
+        for namespace in ("tmp", "confirmed"):
+            with self.subTest(namespace=namespace):
+                target = self.root / namespace
+                target.mkdir(exist_ok=True)
+
+                def fake_lstat(path, *args, **kwargs):
+                    result = original_lstat(path, *args, **kwargs)
+                    if Path(path) == target:
+                        values = list(result)
+                        values[0] = stat.S_IFLNK | 0o777
+                        return os.stat_result(values)
+                    return result
+
+                with patch("backend.image_storage.os.lstat", side_effect=fake_lstat):
+                    with self.assertRaises(ImageStoragePathError):
+                        self.storage._namespace_root(namespace)
+
+    def test_exclusive_publication_falls_back_when_hard_links_unavailable(self):
+        with patch("backend.image_storage.os.link", side_effect=OSError("unsupported")):
+            saved = self.storage.save_temp(JPEG, "x.jpg", "image/jpeg")
+        self.assertEqual((self.root / saved.relative_path).read_bytes(), JPEG)
+
+    def test_mutating_clock_is_validated_on_every_use(self):
+        values = iter((NOW, datetime(2026, 7, 13, 12, 1)))
+        storage = ImageStorage(root=self.root, token_secret=SECRET, now=lambda: next(values))
+        with self.assertRaises(ImageStorageConfigError):
+            storage.save_temp(JPEG, "x.jpg", "image/jpeg")
+
+    def test_mutating_clock_rejects_non_utc_offset(self):
+        values = iter((NOW, datetime(2026, 7, 13, 12, 1, tzinfo=timezone(timedelta(hours=-3)))))
+        storage = ImageStorage(root=self.root, token_secret=SECRET, now=lambda: next(values))
+        with self.assertRaises(ImageStorageConfigError):
+            storage.save_temp(JPEG, "x.jpg", "image/jpeg")
+
 
 class ImageStorageConfigurationTests(unittest.TestCase):
+    def test_root_creation_os_error_is_sanitized(self):
+        root = Path(tempfile.gettempdir()).resolve() / "private-storage"
+        with patch("backend.image_storage.Path.mkdir", side_effect=PermissionError("sensitive path")):
+            with self.assertRaises(ImageStorageConfigError) as error:
+                ImageStorage(root=root, token_secret=SECRET)
+        self.assertNotIn("sensitive path", str(error.exception))
+        self.assertNotIn(str(root), str(error.exception))
+
     def test_reads_environment_and_applies_defaults(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {
             "VIAJE_IMAGE_STORAGE_DIR": str(Path(directory).resolve()),
