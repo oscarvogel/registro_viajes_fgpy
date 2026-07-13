@@ -368,11 +368,11 @@ if __name__ == "__main__":
 
 
 class TripImageEndpointServiceTest(unittest.TestCase):
-    def make_confirm_fixture(self):
+    def make_confirm_fixture(self, clock=None):
         from image_storage import ImageStorage
         import models, schemas
         root = tempfile.TemporaryDirectory(); self.addCleanup(root.cleanup)
-        storage = ImageStorage(Path(root.name).resolve(), "x" * 32)
+        storage = ImageStorage(Path(root.name).resolve(), "x" * 32, temporary_ttl=__import__('datetime').timedelta(hours=1), now=(lambda: clock[0]) if clock else None)
         engine = create_engine("sqlite:///:memory:")
         for table in (models.Empleado.__table__, models.Proveedor.__table__, models.Equipo.__table__, models.UnidadNegocio.__table__, models.TableroProduccion.__table__, models.ViajeImagen.__table__):
             table.create(engine)
@@ -471,6 +471,41 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         self.assertTrue(storage.resolve_temp(request.upload_token).path.is_file())
         result = service.confirm(request, user)
         self.assertIsNotNone(result["imagen_id"])
+
+    def test_commit_failure_after_expiry_preserves_error_and_compensates(self):
+        from trip_image_service import TripImageService
+        import models
+        from sqlalchemy.exc import SQLAlchemyError
+        clock = [datetime(2026, 7, 13, 12, 0, tzinfo=timezone.utc)]
+        db, storage, user, request = self.make_confirm_fixture(clock)
+        service = TripImageService(db, storage, object())
+        original_promote = storage.promote
+        def promote_then_expire(*args, **kwargs):
+            result = original_promote(*args, **kwargs)
+            clock[0] += __import__('datetime').timedelta(hours=2)
+            return result
+        with patch.object(storage, "promote", side_effect=promote_then_expire), patch.object(db, "commit", side_effect=SQLAlchemyError("commit failed")):
+            with self.assertRaises(SQLAlchemyError) as caught:
+                service.confirm(request, user)
+        self.assertEqual(str(caught.exception), "commit failed")
+        self.assertEqual(db.query(models.TableroProduccion).count(), 0)
+        self.assertEqual(db.query(models.ViajeImagen).count(), 0)
+        self.assertFalse(list(storage.root.glob("confirmed/**/*.jpg")))
+        self.assertTrue(list(storage.root.glob("tmp/**/*.jpg")))
+
+    def test_compensation_failure_does_not_mask_commit_error(self):
+        from trip_image_service import TripImageService
+        from image_storage import ImageStoragePathError
+        import models
+        from sqlalchemy.exc import SQLAlchemyError
+        db, storage, user, request = self.make_confirm_fixture()
+        service = TripImageService(db, storage, object())
+        with patch.object(db, "commit", side_effect=SQLAlchemyError("commit failed")), patch.object(storage, "revert_promotion", side_effect=ImageStoragePathError("private path")):
+            with self.assertRaises(SQLAlchemyError) as caught:
+                service.confirm(request, user)
+        self.assertEqual(str(caught.exception), "commit failed")
+        self.assertEqual(db.query(models.TableroProduccion).count(), 0)
+        self.assertEqual(db.query(models.ViajeImagen).count(), 0)
 
     def test_all_image_routes_require_authentication(self):
         sentry_sdk = types.ModuleType("sentry_sdk"); sentry_sdk.init = lambda *a, **k: None

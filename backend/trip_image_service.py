@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
@@ -12,6 +13,8 @@ import schemas
 from image_storage import ImageStorage
 from trip_image_normalization import normalize_extraction, normalize_provider_name
 from trip_service import create_trip
+
+logger = logging.getLogger(__name__)
 
 
 class TripImageService:
@@ -44,6 +47,14 @@ class TripImageService:
     @staticmethod
     def token_hash(token):
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def _compensate(self, token, promoted):
+        if promoted is None:
+            return
+        try:
+            self.storage.revert_promotion(token, promoted)
+        except Exception:
+            logger.error("No se pudo compensar una promocion de imagen")
 
     def confirm(self, request: schemas.TripImageConfirmRequest, current_user):
         token_hash = self.token_hash(request.upload_token)
@@ -85,13 +96,8 @@ class TripImageService:
             self.db.commit(); self.db.refresh(image)
             return {"viaje_id": trip.id, "imagen_id": image.id}
         except IntegrityError:
-            if promoted is not None:
-                try:
-                    self.storage.revert_promotion(request.upload_token, promoted)
-                finally:
-                    self.db.rollback()
-            else:
-                self.db.rollback()
+            self._compensate(request.upload_token, promoted)
+            self.db.rollback()
             existing = self.db.query(models.ViajeImagen).filter(models.ViajeImagen.token_hash == token_hash).first()
             if existing:
                 if existing.viaje.empleado_id != current_user.id:
@@ -99,9 +105,6 @@ class TripImageService:
                 return {"viaje_id": existing.viaje_id, "imagen_id": existing.id}
             raise HTTPException(409, "Conflicto al guardar el viaje")
         except Exception:
-            try:
-                if promoted is not None:
-                    self.storage.revert_promotion(request.upload_token, promoted)
-            finally:
-                self.db.rollback()
+            self._compensate(request.upload_token, promoted)
+            self.db.rollback()
             raise

@@ -328,13 +328,13 @@ class ImageStorage:
         except (ValueError, TypeError, json.JSONDecodeError, UnicodeError) as exc:
             raise ImageTokenError("Invalid signed image data") from exc
 
-    def _verify_token(self, token: str) -> dict:
+    def _verify_token(self, token: str, *, enforce_expiry: bool = True) -> dict:
         try:
             payload = self._decode_signed(token)
             if payload.get("v") != self.TOKEN_VERSION:
                 raise ImageTokenError("Unsupported image token version")
             expires_at = datetime.fromtimestamp(payload["exp"], timezone.utc)
-            if self._current_time() >= expires_at:
+            if enforce_expiry and self._current_time() >= expires_at:
                 raise ImageTokenExpiredError("Image token has expired")
             if not isinstance(payload.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", payload["id"]):
                 raise ImageTokenError("Invalid image token")
@@ -645,7 +645,7 @@ class ImageStorage:
             return confirmed
 
     def revert_promotion(self, token: str, confirmed: ConfirmedImage) -> None:
-        payload = self._verify_token(token)
+        payload = self._verify_token(token, enforce_expiry=False)
         expected_relative = f"confirmed/{confirmed.confirmed_at:%Y/%m}/{payload['id']}{_MIME_EXTENSIONS[payload['mime']]}"
         if (
             not isinstance(confirmed, ConfirmedImage)
@@ -661,7 +661,11 @@ class ImageStorage:
             if not receipt_path.is_file():
                 if destination.exists():
                     raise ImageValidationError("Promotion receipt is unavailable")
-                self.resolve_temp(token)
+                if not source.is_file():
+                    raise ImageValidationError("Temporary image is unavailable")
+                digest, mime, size = self._inspect_file(source, "tmp")
+                if digest != payload["sha256"] or mime != payload["mime"] or size != payload["size"]:
+                    raise ImageValidationError("Temporary image validation failed")
                 return
             loaded = self._load_receipt(receipt_path, token, payload)
             if loaded != confirmed:

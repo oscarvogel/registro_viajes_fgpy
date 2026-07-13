@@ -65,6 +65,20 @@ class ImageStorageTestCase(unittest.TestCase):
         promoted_again = self.storage.promote(saved.token, NOW)
         self.assertEqual(promoted_again.relative_path, confirmed.relative_path)
 
+    def test_revert_after_token_expiry_still_restores_signed_temp(self):
+        clock = [NOW]
+        storage = ImageStorage(self.root, SECRET, max_bytes=1024, temporary_ttl=timedelta(hours=1), now=lambda: clock[0])
+        saved = storage.save_temp(JPEG, "ticket.jpg", "image/jpeg")
+        confirmed = storage.promote(saved.token, NOW)
+        clock[0] = NOW + timedelta(hours=2)
+        storage.revert_promotion(saved.token, confirmed)
+        storage.revert_promotion(saved.token, confirmed)
+        self.assertTrue((self.root / saved.relative_path).is_file())
+        self.assertTrue((self.root / (saved.relative_path + ".json")).is_file())
+        self.assertFalse((self.root / confirmed.relative_path).exists())
+        with self.assertRaises(ImageTokenExpiredError):
+            storage.resolve_temp(saved.token)
+
     def test_revert_is_idempotent_and_rejects_wrong_confirmation(self):
         saved = self.storage.save_temp(JPEG, "ticket.jpg", "image/jpeg")
         confirmed = self.storage.promote(saved.token, NOW)
