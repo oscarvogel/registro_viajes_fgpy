@@ -3,6 +3,30 @@ import { API_URL } from '../config.js'
 
 const endpoint = (apiUrl, path) => `${String(apiUrl).replace(/\/$/, '')}${path}`
 
+const TRIP_IMAGE_MAX_BYTES = 10 * 1024 * 1024
+const TRIP_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const TRIP_IMAGE_EXTENSION = /\.(?:jpe?g|png|webp)$/i
+
+export const validateTripImageFile = (file, maxBytes = TRIP_IMAGE_MAX_BYTES) => {
+  if (typeof Blob === 'undefined' || !(file instanceof Blob)) throw new TypeError('Seleccioná una imagen válida.')
+  const type = String(file.type || '').trim().toLowerCase()
+  const name = typeof file.name === 'string' ? file.name.trim() : ''
+  const supported = type ? TRIP_IMAGE_TYPES.has(type) : TRIP_IMAGE_EXTENSION.test(name)
+  if (!supported) throw new TypeError('El archivo debe ser una imagen JPG, PNG o WEBP.')
+  if (!Number.isFinite(maxBytes) || maxBytes <= 0 || file.size <= 0) throw new TypeError('La imagen está vacía o no es válida.')
+  if (file.size > maxBytes) throw new TypeError('La imagen es demasiado grande. El máximo es 10 MB.')
+  return file
+}
+
+export const createTripImageLifecycle = () => {
+  let active = true
+  return {
+    get active() { return active },
+    deactivate() { active = false },
+    runIfActive(callback) { return active ? callback() : undefined },
+  }
+}
+
 export const analyzeTripImage = async (file, httpClient = axios, apiUrl = API_URL) => {
   if (typeof Blob === 'undefined' || !(file instanceof Blob)) throw new TypeError('Seleccioná una imagen válida.')
   const body = new FormData()

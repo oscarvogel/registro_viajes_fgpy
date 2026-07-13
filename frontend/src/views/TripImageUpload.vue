@@ -5,10 +5,12 @@ import { useCatalogStore } from '../stores/catalog'
 import {
   analyzeTripImage,
   confirmTripImage,
+  createTripImageLifecycle,
   createTripImageObjectUrl,
   fetchTripImageBlob,
   mapTripImageError,
   revokeTripImageObjectUrl,
+  validateTripImageFile,
 } from '../services/tripImage.js'
 import {
   buildConfirmPayload,
@@ -29,6 +31,7 @@ const errorMessage = ref('')
 const errorAction = ref('reset')
 const failedStep = ref('')
 const fileInput = ref(null)
+const lifecycle = createTripImageLifecycle()
 
 const activeProviders = computed(() => catalog.proveedores.filter((item) => item.activo === true))
 const busy = computed(() => state.value === 'processing' || state.value === 'confirming')
@@ -99,8 +102,14 @@ const analyzeSelected = async () => {
 const chooseFile = async (event) => {
   const file = event.target.files?.[0]
   if (!file) return
+  try {
+    validateTripImageFile(file)
+    replacePreview(file)
+  } catch (error) {
+    showError(error, 'select')
+    return
+  }
   selectedFile.value = file
-  replacePreview(file)
   review.value = null
   result.value = null
   errorMessage.value = ''
@@ -140,7 +149,7 @@ const confirmReview = async () => {
     if (Number.isInteger(imageId) && imageId > 0) {
       try {
         const confirmedBlob = await fetchTripImageBlob(imageId)
-        replacePreview(confirmedBlob)
+        lifecycle.runIfActive(() => replacePreview(confirmedBlob))
       } catch {
         // El registro ya quedó confirmado; se conserva la vista previa local.
       }
@@ -179,6 +188,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  lifecycle.deactivate()
   if (previewUrl.value) revokeTripImageObjectUrl(previewUrl.value)
 })
 </script>
