@@ -323,6 +323,32 @@ class MiniMaxVisionClientTests(unittest.TestCase):
         self.assertEqual(run.call_args.args[0], ["taskkill", "/PID", "4321", "/T", "/F"])
         self.assertFalse(run.call_args.kwargs["shell"])
 
+    def test_posix_group_gets_sigkill_even_when_parent_wait_succeeds(self):
+        class Stream:
+            def write(self, value): return len(value)
+            def flush(self): pass
+            def close(self): pass
+            def read(self, size): return b""
+
+        class Process:
+            pid = 9876
+            stdin, stdout, stderr = Stream(), Stream(), Stream()
+            def poll(self): return None
+            def terminate(self): pass
+            def kill(self): pass
+            def wait(self, timeout): return 0
+
+        with patch("backend.minimax_vision.os.name", "posix"), \
+                patch("backend.minimax_vision.subprocess.Popen", return_value=Process()), \
+                patch("backend.minimax_vision.os.killpg", create=True) as killpg:
+            with self.assertRaises(TimeoutError):
+                _SubprocessExecutor()(
+                    argv=["fake"], messages=self._protocol_messages(), env={},
+                    timeout_seconds=1e-9, max_output_bytes=4096,
+                )
+        self.assertIn((9876, 15), [call.args for call in killpg.call_args_list])
+        self.assertIn((9876, 9), [call.args for call in killpg.call_args_list])
+
     @staticmethod
     def _protocol_messages():
         from backend.minimax_vision import _messages

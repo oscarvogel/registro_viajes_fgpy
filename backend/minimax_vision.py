@@ -97,6 +97,7 @@ class _SubprocessExecutor:
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, shell=False, **process_options,
         )
+        pgid = getattr(proc, "pid", None) if os.name != "nt" else None
         chunks: queue.Queue[Any] = queue.Queue(maxsize=32)
         budget_lock = threading.Lock()
         overflow_event = threading.Event()
@@ -202,6 +203,15 @@ class _SubprocessExecutor:
                             pass
                         try:
                             proc.wait(timeout=2)
+                        except Exception:
+                            pass
+                if pgid is not None:
+                    try:
+                        import signal
+                        os.killpg(pgid, getattr(signal, "SIGKILL", 9))
+                    except Exception:
+                        try:
+                            proc.kill()
                         except Exception:
                             pass
                 drain_deadline = time.monotonic() + 2
