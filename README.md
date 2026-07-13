@@ -146,18 +146,44 @@ El backend crea subdirectorios con permisos restrictivos, pero la cuenta del ser
 Antes de migrar producción, confirmar la base seleccionada, inspeccionar la estructura actual y realizar un backup. El script agrega `pesaje_unico`, permite `cliente_id=NULL` y crea `viaje_imagenes`; no debe ejecutarse a ciegas:
 
 ```bash
+set -Eeuo pipefail
 umask 077
-export DB_NAME='BASE_DATOS'
-export MYSQL_CNF='/ruta/privada/mysql-client.cnf'
-export BACKUP="$PWD/backup-viaje-imagen-$(date +%Y%m%d-%H%M%S).sql"
-mysql --defaults-extra-file="$MYSQL_CNF" --table "$DB_NAME" -e "SHOW CREATE TABLE tablero_produccion\G; SHOW COLUMNS FROM tablero_produccion LIKE 'cliente_id';"
+
+: "${DB_NAME:?Definir DB_NAME}"
+: "${MYSQL_CNF:?Definir MYSQL_CNF con ruta absoluta}"
+: "${BACKUP_DIR:?Definir BACKUP_DIR con ruta absoluta}"
+[[ "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]]
+[[ "$MYSQL_CNF" = /* && -r "$MYSQL_CNF" ]]
+[[ "$BACKUP_DIR" = /* ]]
+install -d -m 0700 -- "$BACKUP_DIR"
+
+BACKUP="$(mktemp --tmpdir="$BACKUP_DIR" "pre-ocr-${DB_NAME}-$(date +%Y%m%d-%H%M%S)-XXXXXX.sql")"
+CLIENT_SCHEMA="${BACKUP}.cliente_id.tsv"
+cleanup_pre_migration() {
+  status=$?; trap - ERR INT TERM HUP
+  rm -f -- "$BACKUP" "$CLIENT_SCHEMA"
+  (( status != 0 )) || status=1
+  exit "$status"
+}
+trap cleanup_pre_migration ERR INT TERM HUP
+
+mysql --defaults-extra-file="$MYSQL_CNF" --batch --skip-column-names "$DB_NAME" -e "
+SELECT COLUMN_TYPE, IS_NULLABLE, COALESCE(COLUMN_DEFAULT, '<NULL>')
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tablero_produccion' AND COLUMN_NAME='cliente_id';" > "$CLIENT_SCHEMA"
+[[ "$(wc -l < "$CLIENT_SCHEMA")" -eq 1 && -s "$CLIENT_SCHEMA" ]]
+
 mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers --events --databases "$DB_NAME" > "$BACKUP"
-test -s "$BACKUP"
+[[ -s "$BACKUP" ]]
+sync -f "$BACKUP" "$CLIENT_SCHEMA"
+trap - ERR INT TERM HUP
+
 mysql --defaults-extra-file="$MYSQL_CNF" "$DB_NAME" < backend/migrations/20260713_add_trip_image_ocr.sql
 mysql --defaults-extra-file="$MYSQL_CNF" --table "$DB_NAME" < backend/migrations/20260713_verify_trip_image_ocr.sql
+printf 'Backup previo: %s\nDefinicion cliente_id: %s\n' "$BACKUP" "$CLIENT_SCHEMA"
 ```
 
-`mysql-client.cnf` debe ser legible solo por la cuenta operativa y contener las credenciales fuera del historial del shell; no usar `-pCLAVE`. Conservar también la salida previa de `SHOW CREATE TABLE`, porque documenta el tipo y nullability originales de `cliente_id`. La migración es idempotente, pero se detiene si encuentra `token_hash` duplicados. La verificación es de solo lectura y debe mostrar:
+`mysql-client.cnf` debe ser legible solo por la cuenta operativa y contener las credenciales fuera del historial del shell; no usar `-pCLAVE`. Conservar el archivo `.cliente_id.tsv` junto al backup, porque documenta el tipo, nullability y default originales de `cliente_id`. La migración es idempotente, pero se detiene si encuentra `token_hash` duplicados. La verificación es de solo lectura y debe mostrar:
 
 - `tablero_produccion.pesaje_unico` no nulo con valor por defecto `0`;
 - `tablero_produccion.cliente_id` nullable;
@@ -169,28 +195,84 @@ mysql --defaults-extra-file="$MYSQL_CNF" --table "$DB_NAME" < backend/migrations
 El rollback destructivo restaura la base al instante del backup y pierde cualquier escritura posterior. Usarlo únicamente con la aplicación detenida, una ventana aprobada y el archivo validado. Antes de comenzar, guardar además un backup del estado fallido para investigación.
 
 ```bash
-sudo systemctl stop SERVICIO_REGISTRO_VIAJES
+set -Eeuo pipefail
+umask 077
 
-# Revertir el checkout/symlink o desplegar el artefacto anterior ya verificado.
-# El mecanismo exacto depende del esquema de releases del servidor.
+: "${DB_NAME:?Definir DB_NAME}"
+: "${MYSQL_CNF:?Definir MYSQL_CNF con ruta absoluta}"
+: "${BACKUP:?Definir BACKUP con el dump previo}"
+: "${CLIENT_SCHEMA_BEFORE:?Definir CLIENT_SCHEMA_BEFORE con el .cliente_id.tsv previo}"
+: "${STATE_DIR:?Definir STATE_DIR con ruta absoluta}"
+: "${SERVICE_NAME:?Definir SERVICE_NAME}"
+: "${CURRENT_RELEASE_LINK:?Definir el symlink current de la aplicacion}"
+: "${PREVIOUS_RELEASE:?Definir el release anterior verificado}"
 
-export DB_NAME='BASE_DATOS'
-export MYSQL_CNF='/ruta/privada/mysql-client.cnf'
-export BACKUP='/ruta/privada/backup-viaje-imagen-AAAAMMDD-HHMMSS.sql'
-test -r "$BACKUP" && test -s "$BACKUP"
-mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers --events --databases "$DB_NAME" > "${BACKUP}.estado-fallido"
+[[ "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]]
+[[ "$SERVICE_NAME" =~ ^[A-Za-z0-9_.@-]+$ ]]
+[[ "$MYSQL_CNF" = /* && -r "$MYSQL_CNF" ]]
+[[ "$BACKUP" = /* && -r "$BACKUP" && -s "$BACKUP" ]]
+[[ "$CLIENT_SCHEMA_BEFORE" = /* && -r "$CLIENT_SCHEMA_BEFORE" && -s "$CLIENT_SCHEMA_BEFORE" ]]
+[[ "$STATE_DIR" = /* ]]
+[[ "$CURRENT_RELEASE_LINK" = /* && -L "$CURRENT_RELEASE_LINK" ]]
+[[ "$PREVIOUS_RELEASE" = /* && -d "$PREVIOUS_RELEASE" ]]
+install -d -m 0700 -- "$STATE_DIR"
+mysql --defaults-extra-file="$MYSQL_CNF" --batch --skip-column-names "$DB_NAME" -e 'SELECT 1' | grep -qx '1'
+
+STATE_DUMP="$(mktemp --tmpdir="$STATE_DIR" "estado-fallido-${DB_NAME}-$(date +%Y%m%d-%H%M%S)-XXXXXX.sql")"
+CURRENT_CLIENT_SCHEMA="$(mktemp --tmpdir="$STATE_DIR" "cliente-id-restaurado-${DB_NAME}-XXXXXX.tsv")"
+NEW_RELEASE_LINK="${CURRENT_RELEASE_LINK}.rollback.$$"
+cleanup_rollback() {
+  status=$?; trap - ERR INT TERM HUP
+  rm -f -- "$STATE_DUMP" "$CURRENT_CLIENT_SCHEMA" "$NEW_RELEASE_LINK"
+  (( status != 0 )) || status=1
+  exit "$status"
+}
+trap cleanup_rollback ERR INT TERM HUP
+
+# Ningun DROP se ejecuta hasta tener un segundo dump valido y durable.
+mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers --events --databases "$DB_NAME" > "$STATE_DUMP"
+[[ -s "$STATE_DUMP" ]]
+sync -f "$STATE_DUMP"
+trap - ERR INT TERM HUP
+cleanup_after_state_dump() {
+  status=$?; trap - ERR INT TERM HUP
+  rm -f -- "$CURRENT_CLIENT_SCHEMA" "$NEW_RELEASE_LINK"
+  (( status != 0 )) || status=1
+  exit "$status"
+}
+trap cleanup_after_state_dump ERR INT TERM HUP
+
+sudo systemctl stop "$SERVICE_NAME"
+if sudo systemctl is-active --quiet "$SERVICE_NAME"; then
+  echo "El servicio no se detuvo" >&2
+  exit 1
+fi
+
+# Rollback atomico de la aplicacion para despliegues basados en symlink de releases.
+ln -s -- "$PREVIOUS_RELEASE" "$NEW_RELEASE_LINK"
+mv -Tf -- "$NEW_RELEASE_LINK" "$CURRENT_RELEASE_LINK"
 
 # La tabla nueva no figura en un backup anterior y debe retirarse antes de restaurar.
 mysql --defaults-extra-file="$MYSQL_CNF" "$DB_NAME" -e "SET FOREIGN_KEY_CHECKS=0; DROP TABLE IF EXISTS viaje_imagenes; SET FOREIGN_KEY_CHECKS=1;"
 mysql --defaults-extra-file="$MYSQL_CNF" < "$BACKUP"
 
-mysql --defaults-extra-file="$MYSQL_CNF" --table "$DB_NAME" -e "
-SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='viaje_imagenes';
-SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tablero_produccion' AND COLUMN_NAME IN ('cliente_id','pesaje_unico') ORDER BY COLUMN_NAME;"
+[[ "$(mysql --defaults-extra-file="$MYSQL_CNF" --batch --skip-column-names "$DB_NAME" -e "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='viaje_imagenes';")" -eq 0 ]]
+[[ "$(mysql --defaults-extra-file="$MYSQL_CNF" --batch --skip-column-names "$DB_NAME" -e "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tablero_produccion' AND COLUMN_NAME='pesaje_unico';")" -eq 0 ]]
+mysql --defaults-extra-file="$MYSQL_CNF" --batch --skip-column-names "$DB_NAME" -e "
+SELECT COLUMN_TYPE, IS_NULLABLE, COALESCE(COLUMN_DEFAULT, '<NULL>')
+FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='tablero_produccion' AND COLUMN_NAME='cliente_id';" > "$CURRENT_CLIENT_SCHEMA"
+cmp --silent "$CLIENT_SCHEMA_BEFORE" "$CURRENT_CLIENT_SCHEMA"
 
-sudo systemctl start SERVICIO_REGISTRO_VIAJES
+sudo systemctl start "$SERVICE_NAME"
+sudo systemctl is-active --quiet "$SERVICE_NAME"
 curl --fail --silent --show-error http://127.0.0.1:8000/api/admin/health
+trap - ERR INT TERM HUP
+rm -f -- "$CURRENT_CLIENT_SCHEMA"
+printf 'Estado previo al rollback conservado en: %s\n' "$STATE_DUMP"
 ```
+
+Los comandos anteriores asumen un despliegue Debian/bash con releases inmutables y un symlink `current`; si el servidor usa otro mecanismo, preparar y probar su sustituto atómico antes de la ventana. Ante cualquier error, `set -Eeuo pipefail` detiene el procedimiento y el servicio permanece detenido; no continuar manualmente desde la línea siguiente sin diagnosticar el estado.
 
 La verificación debe mostrar que `viaje_imagenes` y `pesaje_unico` ya no existen, y que `cliente_id` volvió exactamente al `COLUMN_TYPE`, `IS_NULLABLE` y default capturados antes de migrar. El `UNIQUE token_hash` y los demás índices de evidencia desaparecen junto con `viaje_imagenes`; no intentar borrarlos después. Nunca eliminar `cliente_id`: la migración solo cambia su nullability.
 
