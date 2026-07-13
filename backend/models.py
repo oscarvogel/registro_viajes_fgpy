@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Date, Float, Text, Time, DECIMAL, DateTime
 from sqlalchemy.orm import relationship
 from database import Base
@@ -108,7 +110,8 @@ class TableroProduccion(Base):
     hora = Column(Time, nullable=False)
     turno = Column(String(10), nullable=False)
     
-    cliente_id = Column(Integer, nullable=False)
+    cliente_id = Column(Integer, nullable=True)
+    pesaje_unico = Column(Boolean, nullable=False, default=False)
     proveedor_id = Column(Integer, ForeignKey("proveedor.id"), nullable=True)
     proveedor = relationship("Proveedor")
     plantas = Column(Integer, nullable=False, default=0)
@@ -152,6 +155,23 @@ class TableroProduccion(Base):
     # Relationships
     empleado = relationship("Empleado")
     equipo = relationship("Equipo")
+    imagenes = relationship("ViajeImagen", back_populates="viaje")
+
+
+class ViajeImagen(Base):
+    __tablename__ = "viaje_imagenes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    viaje_id = Column(Integer, ForeignKey("tablero_produccion.id"), nullable=False, index=True)
+    storage_path = Column(String(500), nullable=False)
+    original_name = Column(String(255), nullable=False)
+    mime_type = Column(String(100), nullable=False)
+    sha256 = Column(String(64), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+    viaje = relationship("TableroProduccion", back_populates="imagenes")
 
 class MovimientoCombustible(Base):
     __tablename__ = "movimientocombustible"
