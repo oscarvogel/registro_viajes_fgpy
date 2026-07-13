@@ -12,6 +12,7 @@ BEGIN
     DECLARE named_index_exists INT DEFAULT 0;
     DECLARE named_index_correct INT DEFAULT 0;
     DECLARE exact_index_exists INT DEFAULT 0;
+    DECLARE duplicate_token_groups INT DEFAULT 0;
 
     IF NOT EXISTS (
         SELECT 1
@@ -92,6 +93,28 @@ BEGIN
     IF exact_index_exists = 0 THEN
         ALTER TABLE viaje_imagenes
             ADD INDEX ix_viaje_imagenes_expires_at (expires_at);
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'viaje_imagenes'
+    ) THEN
+        SELECT COUNT(*) INTO duplicate_token_groups
+          FROM (
+              SELECT token_hash
+                FROM viaje_imagenes
+               WHERE token_hash IS NOT NULL
+                 AND token_hash <> ''
+               GROUP BY token_hash
+              HAVING COUNT(*) > 1
+          ) AS duplicate_tokens;
+
+        IF duplicate_token_groups > 0 THEN
+            SIGNAL SQLSTATE '45000'
+                SET MESSAGE_TEXT = 'Migracion detenida: viaje_imagenes contiene token_hash duplicados; depure los duplicados antes de crear el indice unico';
+        END IF;
     END IF;
 
     SELECT COUNT(*), COALESCE(MAX(index_columns = 'token_hash' AND non_unique = 0), 0)

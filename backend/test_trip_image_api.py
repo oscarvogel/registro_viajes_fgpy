@@ -46,6 +46,24 @@ class TripImageModelMetadataTest(unittest.TestCase):
         self.assertIn("GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX)", verification)
         self.assertNotIn("COLUMN_NAME IN ('expires_at', 'token_hash')", verification)
 
+    def test_preflight_de_duplicados_antecede_ddl_destructivo_del_token(self):
+        migration = (
+            Path(__file__).resolve().parent
+            / "migrations"
+            / "20260713_add_trip_image_ocr.sql"
+        ).read_text(encoding="utf-8")
+
+        duplicate_query = "HAVING COUNT(*) > 1"
+        signal = "SIGNAL SQLSTATE '45000'"
+        drop_token_index = "DROP INDEX uq_viaje_imagenes_token_hash"
+        add_unique_token = "ADD UNIQUE INDEX uq_viaje_imagenes_token_hash"
+
+        for required in (duplicate_query, signal, drop_token_index, add_unique_token):
+            self.assertIn(required, migration)
+        self.assertLess(migration.index(duplicate_query), migration.index(signal))
+        self.assertLess(migration.index(signal), migration.index(drop_token_index))
+        self.assertLess(migration.index(signal), migration.index(add_unique_token))
+
 
 if __name__ == "__main__":
     unittest.main()
