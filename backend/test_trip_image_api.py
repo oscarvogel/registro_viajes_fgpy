@@ -1,8 +1,10 @@
 import sys
+import types
 import unittest
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -168,6 +170,17 @@ class CreateTripServiceTest(unittest.TestCase):
         self.assertEqual(row.produccion, Decimal("32.00"))
         self.assertFalse(row.pesaje_unico)
 
+    def test_normal_acepta_hasta_200_tn_y_rechaza_mas(self):
+        row = self.create_trip(self.payload(
+            neto_origen=150, neto_destino=150,
+            peso_bruto_origen=180, tara_origen=30,
+        ))
+        self.assertEqual(row.produccion, Decimal("150.00"))
+        self.assert_bad_request(
+            numero_remision="R-2", numero_remision_fpv="F-2",
+            neto_origen=201, neto_destino=150,
+        )
+
     def test_pesaje_unico_rechaza_origen_no_cero(self):
         for field in ("peso_bruto_origen", "tara_origen", "neto_origen"):
             values = dict(pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
@@ -185,6 +198,20 @@ class CreateTripServiceTest(unittest.TestCase):
             {"peso_bruto_destino": 49.690, "tara_destino": 17.000, "neto_destino": 32.610},
         ):
             self.assert_bad_request(**(base | changes))
+
+    def test_pesaje_unico_acepta_hasta_200_tn_y_rechaza_mas(self):
+        base = dict(
+            pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+            tara_origen=0, neto_origen=0,
+        )
+        row = self.create_trip(self.payload(
+            **base, peso_bruto_destino=190, tara_destino=40, neto_destino=150,
+        ))
+        self.assertEqual(row.produccion, Decimal("150.00"))
+        self.assert_bad_request(
+            **base, numero_remision="R-2", numero_remision_fpv="F-2",
+            peso_bruto_destino=201, tara_destino=1, neto_destino=200,
+        )
 
     def test_normal_preserva_mapeo_defaults_duplicados_y_normalizacion(self):
         row = self.create_trip(self.payload(proveedor_id=None, cliente_id=None))
@@ -220,6 +247,49 @@ class CreateTripServiceTest(unittest.TestCase):
         self.employee.activo = False
         self.db.commit()
         self.assert_bad_request(numero_remision="R-2", numero_remision_fpv="F-2")
+
+    def test_rechaza_equipo_y_cliente_inactivos(self):
+        self.equipment.activo = False
+        self.db.commit()
+        self.assert_bad_request()
+        self.equipment.activo = True
+        self.client.activo = False
+        self.db.commit()
+        self.assert_bad_request()
+
+    def test_servicio_establece_contexto_de_chofer_y_vehiculo(self):
+        with patch("trip_service.set_request_context") as context:
+            self.create_trip(self.payload())
+        context.assert_any_call(chofer="Perez Ana")
+        context.assert_any_call(vehiculo="AA 123 BB - Camion")
+
+    def test_endpoint_rechaza_chofer_ajeno_y_delega_usuario_actual(self):
+        sentry_sdk = types.ModuleType("sentry_sdk")
+        sentry_sdk.init = lambda *args, **kwargs: None
+        sys.modules.setdefault("sentry_sdk", sentry_sdk)
+        sys.modules.setdefault("sentry_sdk.integrations", types.ModuleType("sentry_sdk.integrations"))
+        for suffix, class_name in (
+            ("logging", "LoggingIntegration"), ("starlette", "StarletteIntegration"),
+            ("fastapi", "FastApiIntegration"),
+        ):
+            module = types.ModuleType(f"sentry_sdk.integrations.{suffix}")
+            setattr(module, class_name, type(class_name, (), {"__init__": lambda self, *a, **k: None}))
+            sys.modules.setdefault(f"sentry_sdk.integrations.{suffix}", module)
+        import main
+
+        registro = self.payload(chofer_id=99)
+        with self.assertRaises(HTTPException) as ctx:
+            main.create_registro_viaje(registro, self.db, self.employee)
+        self.assertEqual(ctx.exception.status_code, 403)
+
+        registro = self.payload(chofer_id=self.employee.id)
+        sentinel = type("Trip", (), {"id": 777})()
+        with patch("main.create_trip", return_value=sentinel) as create, \
+             patch("main.clear_request_context") as clear:
+            response = main.create_registro_viaje(registro, self.db, self.employee)
+        create.assert_called_once_with(self.db, registro, self.employee)
+        clear.assert_called_once_with()
+        self.assertEqual(response, {"id": 777, "message": "Viaje registrado OK"})
 
 
 if __name__ == "__main__":

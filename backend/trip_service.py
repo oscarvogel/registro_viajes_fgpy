@@ -7,9 +7,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import models
+from logger import set_request_context
 
 
-NETO_MAX_TN = Decimal("80")
+NETO_MAX_TN = Decimal("200.0")
 PESO_TOLERANCIA_TN = Decimal("0.010")
 
 
@@ -50,7 +51,7 @@ def _equipment(db, raw_patente):
         equipo = db.query(models.Equipo).filter(
             func.replace(models.Equipo.patente, " ", "") == compact
         ).first()
-    if not equipo:
+    if not equipo or not equipo.activo:
         raise HTTPException(status_code=400, detail="Patente no encontrada")
     return equipo
 
@@ -79,7 +80,7 @@ def _catalogs(db, registro):
         cliente_id = 1
         if registro.cliente_id is not None:
             cliente = db.query(models.Cliente).filter(models.Cliente.id == registro.cliente_id).first()
-            if not cliente:
+            if not cliente or not cliente.activo:
                 raise HTTPException(status_code=400, detail="Cliente no encontrado")
             cliente_id = cliente.id
     return proveedor_id, cliente_id
@@ -88,7 +89,7 @@ def _catalogs(db, registro):
 def _weights(registro):
     destino_neto = _decimal("neto_destino", registro.neto_destino)
     if destino_neto <= 0 or destino_neto > NETO_MAX_TN:
-        raise HTTPException(status_code=400, detail="Valor inválido: neto_destino debe ser > 0 y <= 80 Tn")
+        raise HTTPException(status_code=400, detail=f"Valor inválido: neto_destino debe ser > 0 y <= {NETO_MAX_TN} Tn")
 
     if registro.pesaje_unico:
         for name in ("peso_bruto_origen", "tara_origen", "neto_origen"):
@@ -106,7 +107,7 @@ def _weights(registro):
 
     origen_neto = _decimal("neto_origen", registro.neto_origen)
     if origen_neto <= 0 or origen_neto > NETO_MAX_TN:
-        raise HTTPException(status_code=400, detail="Valor inválido: neto_origen debe ser > 0 y <= 80 Tn")
+        raise HTTPException(status_code=400, detail=f"Valor inválido: neto_origen debe ser > 0 y <= {NETO_MAX_TN} Tn")
     bruto = _decimal("peso_bruto_origen", registro.peso_bruto_origen, allow_none=True)
     if bruto is None:
         bruto = _decimal("peso_bruto_destino", registro.peso_bruto_destino)
@@ -141,6 +142,8 @@ def create_trip(db: Session, registro, effective_user, commit=True):
     employee = _effective_employee(db, effective_user)
     _validate_remitos(db, registro)
     equipo = _equipment(db, registro.patente)
+    set_request_context(chofer=f"{employee.apellido} {employee.nombre}")
+    set_request_context(vehiculo=f"{equipo.patente} - {equipo.descripcion}")
     proveedor_id, cliente_id = _catalogs(db, registro)
     record = _build_record(
         registro, employee, equipo, proveedor_id, cliente_id, _weights(registro)
