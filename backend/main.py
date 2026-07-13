@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Request
+﻿from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Query
 from fastapi.responses import FileResponse
@@ -214,19 +214,19 @@ async def lifespan(app: FastAPI):
     """Maneja el ciclo de vida de la aplicaciÃ³n"""
     # Startup event
     log_system_event("AplicaciÃ³n iniciada", severity="info")
-
+    
     # Iniciar scheduler de tareas
     try:
         task_scheduler.start()
         log_system_event("Scheduler de tareas iniciado", severity="info")
     except Exception as e:
         log_system_event(f"Error iniciando scheduler: {str(e)}", severity="error")
-
+    
     yield  # AquÃ­ la aplicaciÃ³n estÃ¡ corriendo
-
+    
     # Shutdown event
     log_system_event("AplicaciÃ³n cerrÃ¡ndose", severity="info")
-
+    
     # Detener scheduler
     try:
         task_scheduler.stop()
@@ -591,12 +591,12 @@ def read_historial_viajes(
 def login(request: schemas.LoginRequest, db: Session = Depends(get_db), http_request: Request = None):
     # Simple login logic based on Documento
     log_api_request(endpoint="/login", method="POST", user_id=None, status_code=200, duration_ms=0)
-
+    
     # Validate input
     if not request.documento or not str(request.documento).strip():
         log_system_event("Login attempt with empty documento", severity="warning")
         raise HTTPException(status_code=400, detail=LOGIN_INVALID_DETAIL)
-
+    
     documento = str(request.documento).strip()
     client_ip = get_client_ip(http_request)
 
@@ -607,21 +607,21 @@ def login(request: schemas.LoginRequest, db: Session = Depends(get_db), http_req
             detail="Demasiados intentos. Intente nuevamente mas tarde.",
             headers={"Retry-After": str(LOGIN_RATE_LIMIT_LOCKOUT_SECONDS)},
         )
-
+    
     empleado = db.query(models.Empleado).filter(models.Empleado.documento == documento).first()
     if not empleado:
         log_system_event(f"Login attempt with non-existent documento: {documento}", severity="warning")
         register_failed_login(documento, client_ip)
         raise HTTPException(status_code=400, detail=LOGIN_INVALID_DETAIL)
-
+    
     if not empleado.activo:
         log_system_event(f"Login attempt with inactive user: {documento}", severity="warning")
         register_failed_login(documento, client_ip)
         raise HTTPException(status_code=400, detail=LOGIN_INVALID_DETAIL)
-
+    
     clear_failed_login(documento, client_ip)
     log_user_action(user_id=empleado.id, action="login", details={"documento": documento})
-
+    
     access_token = create_access_token(
         data={
             "sub": str(empleado.id),
@@ -639,14 +639,14 @@ def create_registro_viaje(
     current_user: models.Empleado = Depends(get_current_user),
 ):
     # LÃ³gica de cÃ¡lculo y mapeo
-
+    
     # 1. Calcular ProducciÃ³n (Net Weight in kg or Tn?)
     # DB has simple fields, looks like we need standard units.
     # UI: Peso Bruto Origen (Tn), Tara Origen (Tn).
-    # Produccion = (Bruto - Tara) * 1000 to get KG?
-    # Or keep it in Tn? models.Produccion is Decimal(10,2).
+    # Produccion = (Bruto - Tara) * 1000 to get KG? 
+    # Or keep it in Tn? models.Produccion is Decimal(10,2). 
     # Let's assume Tn for now as per forestry standards usually.
-
+    
     produccion_tn = registro.neto_origen  # neto_origen is already in Tn
 
     # Prevent duplicate remitos
@@ -663,7 +663,7 @@ def create_registro_viaje(
         ).first() is not None
         if exists_fgpy:
             raise HTTPException(status_code=400, detail="El NÂº Remito FGPY ya existe")
-
+    
     # 2. Validate Chofer
     empleado = db.query(models.Empleado).filter(models.Empleado.id == registro.chofer_id).first()
     if not empleado:
@@ -795,7 +795,7 @@ def create_registro_viaje(
         plantas=0,
         hrs_no_operativas=0,
         carga_piso=0,
-        tipo_operacion_id=21, # Default "Transporte"
+        tipo_operacion_id=21, # Default "Transporte" 
         lenia_seca=0,
         carga_rollo=0,
         carga_lenia=0,
@@ -811,7 +811,7 @@ def create_registro_viaje(
         usuario=str(registro.chofer_id) if registro.chofer_id else None,
         observaciones=registro.observaciones
     )
-
+    
     try:
         db.add(nuevo_registro)
         db.commit()
@@ -1159,11 +1159,11 @@ def create_movimiento_carreton(
             }
             if not registro.permitir_km_inicial_menor:
                 reject_movimiento_carreton(
-                    f"El KM inicial no puede ser menor al Ãºltimo KM final registrado ({ultimo_km_final:.2f})",
+                    f"El KM inicial no puede ser menor al último KM final registrado ({ultimo_km_final:.2f})",
                     validation_details,
                 )
             app_logger.warning(
-                "Movimiento carretÃ³n con KM inicial menor confirmado por el usuario",
+                "Movimiento carretón con KM inicial menor confirmado por el usuario",
                 extra={"extra_data": sanitize_for_logging(validation_details)},
             )
 
@@ -1279,7 +1279,7 @@ def read_movimientos_combustible(
         .order_by(models.MovimientoCombustible.fecha.asc(), models.MovimientoCombustible.id.asc())
         .all()
     )
-
+    
     return [
         {
             "id": m.id,
@@ -2126,8 +2126,8 @@ def receive_client_logs(log_batch: schemas.ClientLogBatch, db: Session = Depends
             app_logger.warning(
                 f"Client log batch limitado: {logs_count} procesados, {dropped_count} descartados"
             )
-
-
+        
+        
         # Procesar cada log
         for log_entry in logs_to_process:
             # Preparar datos adicionales
@@ -2139,15 +2139,15 @@ def receive_client_logs(log_batch: schemas.ClientLogBatch, db: Session = Depends
                 'user_id': _truncate_client_log_value(log_entry.user_id, 80),
                 'user_agent': _truncate_client_log_value(log_entry.user_agent, 300),
             }
-
+            
             # Agregar informaciÃ³n de dispositivo si existe
             if device_info:
                 extra_data['device_info'] = device_info
-
+            
             # Agregar mÃ©tricas de rendimiento
             if log_entry.duration_ms:
                 extra_data['duration_ms'] = log_entry.duration_ms
-
+            
             # Agregar contexto adicional
             if log_entry.extra:
                 extra_data['extra'] = sanitize_for_logging(_truncate_client_log_value(log_entry.extra))
@@ -2170,7 +2170,7 @@ def receive_client_logs(log_batch: schemas.ClientLogBatch, db: Session = Depends
                                 pass
             except Exception:
                 pass
-
+            
             # Si es un error, incluir detalles del error
             if log_entry.error_name or log_entry.error_message:
                 extra_data['error'] = {
@@ -2178,7 +2178,7 @@ def receive_client_logs(log_batch: schemas.ClientLogBatch, db: Session = Depends
                     'message': _truncate_client_log_value(log_entry.error_message, 500),
                     'stack': _truncate_client_log_value(log_entry.error_stack, 1000)
                 }
-
+                
                 # Registrar como error
                 app_logger.error(
                     f"Frontend Error: {_truncate_client_log_value(log_entry.error_name, 120)}: {_truncate_client_log_value(log_entry.error_message, 500)}",
@@ -2191,7 +2191,7 @@ def receive_client_logs(log_batch: schemas.ClientLogBatch, db: Session = Depends
                     f"Frontend [{_truncate_client_log_value(log_entry.event_type, 120)}]: "
                     f"{_truncate_client_log_value(log_entry.message, 500)}"
                 )
-
+                
                 if level == 'error':
                     app_logger.error(log_message, extra={'extra_data': extra_data})
                 elif level == 'warning':
@@ -2200,8 +2200,8 @@ def receive_client_logs(log_batch: schemas.ClientLogBatch, db: Session = Depends
                     app_logger.critical(log_message, extra={'extra_data': extra_data})
                 else:
                     app_logger.info(log_message, extra={'extra_data': extra_data})
-
-
+                
+        
         log_system_event(
             f"Recibidos {logs_count} logs del cliente",
             severity="info",
@@ -2209,7 +2209,7 @@ def receive_client_logs(log_batch: schemas.ClientLogBatch, db: Session = Depends
         )
 
         _remember_client_log_summary(logs_to_process, error_summary, suggested_actions, db)
-
+        
         return schemas.ClientLogResponse(
             success=True,
             message="Logs recibidos correctamente",
@@ -2217,7 +2217,7 @@ def receive_client_logs(log_batch: schemas.ClientLogBatch, db: Session = Depends
             error_summary=error_summary,
             suggested_actions=suggested_actions,
         )
-
+        
     except Exception as e:
         app_logger.error(f"Error procesando logs del cliente: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error procesando logs: {str(e)}")

@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+sqlalchemy
+mysql-connector-python
+python-dotenv>=1.2.2
+pydantic
+python-multipart>=0.0.27
+passlib[bcrypt]
+pyjwt
+apscheduler
+sentry-sdk
+requests>=2.33.0
+urllib3>=2.7.0
+idna>=3.15
