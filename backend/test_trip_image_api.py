@@ -1,7 +1,7 @@
 import sys
 import types
 import unittest
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch, AsyncMock
@@ -460,9 +460,13 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         self.assertEqual(trip.neto_origen, Decimal("0.00"))
         self.assertEqual(trip.bruto_destino, Decimal("49.69"))
         self.assertEqual(trip.tara_destino, Decimal("17.08"))
+        self.assertEqual(trip.neto_destino, Decimal("32.61"))
         self.assertEqual(trip.equipo.patente, request.patente)
         self.assertEqual(trip.unidad_negocio_id, request.unidad_negocio_id)
+        self.assertEqual(db.query(models.TableroProduccion).count(), 1)
         self.assertEqual(db.query(models.ViajeImagen).count(), 1)
+        evidence = db.get(models.ViajeImagen, first["imagen_id"])
+        self.assertEqual(evidence.expires_at, evidence.created_at + timedelta(days=60))
         other = models.Empleado(id=99, nombre="B", apellido="C", email="b@x", documento="2", fecha_contratacion=date(2020,1,1), activo=True, porcentaje=0)
         db.add(other); db.commit()
         with self.assertRaises(HTTPException) as denied:
