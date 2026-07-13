@@ -393,7 +393,9 @@ class ImageStorageTestCase(unittest.TestCase):
         saved = self.storage.save_temp(JPEG, "orphan.jpg", "image/jpeg")
         confirmed = self.storage.promote(saved.token, NOW)
         receipt = self.root / "receipts" / f"{Path(saved.relative_path).stem}.json"
-        receipt.write_text(receipt.read_text(encoding="ascii")[:-1] + "A", encoding="ascii")
+        signed = receipt.read_text(encoding="ascii")
+        replacement = "B" if signed[-1] == "A" else "A"
+        receipt.write_text(signed[:-1] + replacement, encoding="ascii")
         scan = self.storage.enumerate_promotions()
         self.assertEqual(scan.promotions, ())
         self.assertEqual(scan.invalid_count, 1)
