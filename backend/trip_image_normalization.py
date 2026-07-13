@@ -72,6 +72,15 @@ def _parse_date(value: Any) -> date:
     raise ExtractionValidationError("fecha de remision invalida")
 
 
+def _first_valid_date(*values: Any) -> date:
+    for value in values:
+        try:
+            return _parse_date(value)
+        except ExtractionValidationError:
+            continue
+    raise ExtractionValidationError("fecha de remision invalida")
+
+
 def _normalize_remito(data: Mapping[str, Any]) -> str:
     full = data.get("numero_remision_fpv")
     if full is not None:
@@ -142,7 +151,11 @@ def normalize_extraction(data: Mapping[str, Any]) -> NormalizedExtraction:
         raise ExtractionValidationError("peso fuera del rango soportado") from error
 
     return NormalizedExtraction(
-        fecha_remision=_parse_date(data.get("fecha_remision")),
+        fecha_remision=_first_valid_date(
+            data.get("fecha_remito"),
+            data.get("fecha_ticket"),
+            data.get("fecha_remision"),
+        ),
         numero_remision_fpv=_normalize_remito(data),
         peso_bruto_destino=bruto_destino,
         tara_destino=tara_destino,

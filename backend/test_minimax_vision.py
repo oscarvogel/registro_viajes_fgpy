@@ -20,6 +20,8 @@ from backend.minimax_vision import (
 
 VALID = {
     "fecha_remision": "2026-07-13",
+    "fecha_remito": "2026-07-13",
+    "fecha_ticket": "2026-07-13",
     "remito_tipo": "001",
     "remito_sucursal": "002",
     "remito_numero": "0000123",
@@ -30,7 +32,7 @@ VALID = {
     "unidad_peso": "kg",
     "patente_observada": "ABC123",
     "chofer_observado": "Ana Perez",
-    "confidence": {"fecha_remision": 0.9, "remito_numero": 0.8},
+    "confidence": {"fecha_remision": 0.9, "fecha_remito": 0.9, "fecha_ticket": 0.8, "remito_numero": 0.8},
     "warnings": [],
 }
 
@@ -100,6 +102,10 @@ class MiniMaxVisionClientTests(unittest.TestCase):
         self.assertEqual(call["params"]["arguments"]["image_source"], str(self.image))
         prompt = call["params"]["arguments"]["prompt"]
         self.assertIn("fecha_remision", prompt)
+        self.assertIn("fecha_remito", prompt)
+        self.assertIn("fecha_ticket", prompt)
+        self.assertIn("priorizar fecha_remito", prompt)
+        self.assertIn("FECHA SALIDA", prompt)
         self.assertIn("OCR no elige", prompt)
         self.assertIn("DESTINATARIO DE LA MERCADERIA", prompt)
         self.assertIn('49.690,00', prompt)

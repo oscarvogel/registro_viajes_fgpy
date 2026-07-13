@@ -28,11 +28,15 @@ class MiniMaxVisionTimeoutError(MiniMaxVisionError):
 
 
 PROMPT = """Analiza la imagen para precargar un viaje. Devuelve EXCLUSIVAMENTE un unico objeto JSON,
-sin prosa ni markdown, con estas claves exactas: fecha_remision; remito_tipo; remito_sucursal;
-remito_numero; proveedor_candidato; peso_bruto; tara; neto; unidad_peso; patente_observada;
+sin prosa ni markdown, con estas claves exactas: fecha_remision; fecha_remito; fecha_ticket;
+remito_tipo; remito_sucursal; remito_numero; proveedor_candidato; peso_bruto; tara; neto; unidad_peso; patente_observada;
 chofer_observado; confidence (objeto por campo, solo para las claves de datos anteriores y con
 valores entre 0 y 1); warnings (array de textos).
 Usa null cuando un dato no sea visible. Conserva los pesos y su unidad tal como se observan.
+Para la fecha, fecha_remito debe salir de la NOTA DE REMISION/remito principal (Fecha de Emision,
+Fecha de expedicion o Fecha de inicio del traslado). fecha_ticket debe salir del ticket de balanza,
+especialmente del campo FECHA SALIDA. En fecha_remision priorizar fecha_remito si es visible y legible;
+si fecha_remito no esta visible o no es legible, usar fecha_ticket. No uses la fecha actual.
 Para proveedor_candidato toma la razon social de DESTINATARIO DE LA MERCADERIA, no la del
 remitente ni la empresa que emitio el documento. En un numero como 002-003-0003677,
 remito_tipo son los primeros 3 digitos (002), remito_sucursal los siguientes 3 (003) y
@@ -43,12 +47,12 @@ OCR no elige el chofer configurado, la patente configurada ni la unidad configur
 texto observado. No normalices datos de negocio ni inventes valores."""
 
 _REQUIRED = {
-    "fecha_remision", "remito_tipo", "remito_sucursal", "remito_numero",
+    "fecha_remision", "fecha_remito", "fecha_ticket", "remito_tipo", "remito_sucursal", "remito_numero",
     "proveedor_candidato", "peso_bruto", "tara", "neto", "unidad_peso",
     "patente_observada", "chofer_observado", "confidence", "warnings",
 }
 _TEXT_FIELDS = {
-    "fecha_remision", "remito_tipo", "remito_sucursal", "remito_numero",
+    "fecha_remision", "fecha_remito", "fecha_ticket", "remito_tipo", "remito_sucursal", "remito_numero",
     "proveedor_candidato", "unidad_peso", "patente_observada", "chofer_observado",
 }
 _WEIGHT_FIELDS = {"peso_bruto", "tara", "neto"}

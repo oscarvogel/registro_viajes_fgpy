@@ -40,6 +40,25 @@ class NormalizeExtractionTests(unittest.TestCase):
         result = normalize_extraction(self.valid_data(fecha_remision="2026-07-13"))
         self.assertEqual(result.fecha_remision.isoformat(), "2026-07-13")
 
+    def test_prefers_remito_date_and_falls_back_to_ticket_date(self):
+        remito = normalize_extraction(
+            self.valid_data(
+                fecha_remision=None,
+                fecha_remito="10/07/2026",
+                fecha_ticket="11/07/2026",
+            )
+        )
+        self.assertEqual(remito.fecha_remision.isoformat(), "2026-07-10")
+
+        ticket = normalize_extraction(
+            self.valid_data(
+                fecha_remision=None,
+                fecha_remito="10/7/2026",
+                fecha_ticket="2026-07-11",
+            )
+        )
+        self.assertEqual(ticket.fecha_remision.isoformat(), "2026-07-11")
+
     def test_rejects_unlisted_date_formats(self):
         invalid_dates = (
             "07/13/2026",
