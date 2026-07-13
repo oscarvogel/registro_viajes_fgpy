@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, field_validator, Field
 from typing import Optional, List, Union
 from datetime import date, time
+import math
 
 # --- Login & Token ---
 class Token(BaseModel):
@@ -132,6 +133,16 @@ class RegistroViajeCreate(BaseModel):
     cliente_id: Optional[int] = None
     
     observaciones: Optional[str] = None
+
+    @field_validator(
+        'peso_bruto_origen', 'tara_origen', 'neto_origen',
+        'peso_bruto_destino', 'tara_destino', 'neto_destino',
+    )
+    @classmethod
+    def reject_non_finite_weights(cls, value):
+        if value is not None and not math.isfinite(value):
+            raise ValueError('El peso debe ser un número finito')
+        return value
 
     # Calculated or Default fields managed by Backend
     # produccion (net weight)

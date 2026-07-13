@@ -227,6 +227,72 @@ class CreateTripServiceTest(unittest.TestCase):
         self.assert_bad_request(numero_remision="R-1", numero_remision_fpv="F-9")
         self.assert_bad_request(numero_remision="R-9", numero_remision_fpv="F-1")
 
+    def test_cliente_default_debe_exist_y_estar_activo(self):
+        row = self.create_trip(self.payload(cliente_id=None))
+        self.assertEqual(row.cliente_id, 1)
+        self.db.delete(self.client)
+        self.db.commit()
+        self.assert_bad_request(
+            cliente_id=None, numero_remision="R-2", numero_remision_fpv="F-2"
+        )
+        self.client = self.models.Cliente(id=1, razon_social="Cliente inactivo", activo=False)
+        self.db.add(self.client)
+        self.db.commit()
+        self.assert_bad_request(
+            cliente_id=None, numero_remision="R-3", numero_remision_fpv="F-3"
+        )
+
+    def test_schema_rechaza_pesos_no_finitos(self):
+        for field in (
+            "peso_bruto_origen", "tara_origen", "neto_origen",
+            "peso_bruto_destino", "tara_destino", "neto_destino",
+        ):
+            for value in (float("nan"), float("inf"), float("-inf")):
+                with self.assertRaises(ValueError, msg=f"{field}={value}"):
+                    self.payload(**{field: value})
+
+    def test_servicio_rechaza_pesos_no_finitos_aunque_se_omita_schema(self):
+        normal = self.payload()
+        unique = self.payload(
+            pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+            tara_origen=0, neto_origen=0,
+        )
+        for base, fields in (
+            (normal, ("peso_bruto_origen", "tara_origen", "neto_origen",
+                      "peso_bruto_destino", "tara_destino", "neto_destino")),
+            (unique, ("peso_bruto_origen", "tara_origen", "neto_origen",
+                      "peso_bruto_destino", "tara_destino", "neto_destino")),
+        ):
+            for field in fields:
+                for value in (float("nan"), float("inf"), float("-inf")):
+                    registro = base.model_copy(update={field: value})
+                    with self.assertRaises(HTTPException, msg=f"{field}={value}") as ctx:
+                        self.create_trip(registro)
+                    self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_redondea_pesos_a_centavos_half_up(self):
+        row = self.create_trip(self.payload(
+            peso_bruto_origen=48.505, tara_origen=16.505,
+            neto_origen=32.005, neto_destino=32.615,
+        ))
+        self.assertEqual(row.bruto_destino, Decimal("48.51"))
+        self.assertEqual(row.tara_destino, Decimal("16.51"))
+        self.assertEqual(row.neto_origen, Decimal("32.01"))
+        self.assertEqual(row.neto_destino, Decimal("32.62"))
+        self.assertEqual(row.produccion, Decimal("32.01"))
+
+    def test_pesaje_unico_valida_crudo_y_persiste_relacion_redondeada(self):
+        row = self.create_trip(self.payload(
+            pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+            tara_origen=0, neto_origen=0, peso_bruto_destino=49.695,
+            tara_destino=17.084, neto_destino=32.611,
+        ))
+        self.assertEqual(row.bruto_destino, Decimal("49.70"))
+        self.assertEqual(row.tara_destino, Decimal("17.08"))
+        self.assertEqual(row.neto_destino, Decimal("32.62"))
+        self.assertEqual(row.produccion, Decimal("32.62"))
+        self.assertEqual(row.bruto_destino - row.tara_destino, row.neto_destino)
+
     def test_commit_false_flushes_y_outer_rollback_removes_row(self):
         row = self.create_trip(self.payload(), commit=False)
         self.assertIsNotNone(row.id)
@@ -279,8 +345,10 @@ class CreateTripServiceTest(unittest.TestCase):
 
         registro = self.payload(chofer_id=99)
         with self.assertRaises(HTTPException) as ctx:
-            main.create_registro_viaje(registro, self.db, self.employee)
+            with patch("main.clear_request_context") as clear_rejected:
+                main.create_registro_viaje(registro, self.db, self.employee)
         self.assertEqual(ctx.exception.status_code, 403)
+        clear_rejected.assert_called_once_with()
 
         registro = self.payload(chofer_id=self.employee.id)
         sentinel = type("Trip", (), {"id": 777})()

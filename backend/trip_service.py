@@ -1,5 +1,5 @@
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import HTTPException
 from sqlalchemy import func
@@ -12,15 +12,23 @@ from logger import set_request_context
 
 NETO_MAX_TN = Decimal("200.0")
 PESO_TOLERANCIA_TN = Decimal("0.010")
+DB_WEIGHT_SCALE = Decimal("0.01")
 
 
 def _decimal(name, value, *, allow_none=False):
     if value is None and allow_none:
         return None
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
     except (InvalidOperation, TypeError, ValueError):
         raise HTTPException(status_code=400, detail=f"Valor inválido o faltante: {name} debe ser numérico")
+    if not result.is_finite():
+        raise HTTPException(status_code=400, detail=f"Valor inválido: {name} debe ser finito")
+    return result
+
+
+def _quantize(value):
+    return value.quantize(DB_WEIGHT_SCALE, rounding=ROUND_HALF_UP)
 
 
 def _validate_remitos(db, registro):
@@ -77,44 +85,53 @@ def _catalogs(db, registro):
             raise HTTPException(status_code=400, detail="Cliente no permitido para pesaje único")
         cliente_id = None
     else:
-        cliente_id = 1
-        if registro.cliente_id is not None:
-            cliente = db.query(models.Cliente).filter(models.Cliente.id == registro.cliente_id).first()
-            if not cliente or not cliente.activo:
-                raise HTTPException(status_code=400, detail="Cliente no encontrado")
-            cliente_id = cliente.id
+        cliente_id = registro.cliente_id if registro.cliente_id is not None else 1
+        cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
+        if not cliente or not cliente.activo:
+            raise HTTPException(status_code=400, detail="Cliente no encontrado")
     return proveedor_id, cliente_id
 
 
 def _weights(registro):
-    destino_neto = _decimal("neto_destino", registro.neto_destino)
+    raw = {
+        name: _decimal(name, getattr(registro, name), allow_none=True)
+        for name in (
+            "peso_bruto_origen", "tara_origen", "neto_origen",
+            "peso_bruto_destino", "tara_destino", "neto_destino",
+        )
+    }
+    destino_neto = raw["neto_destino"]
     if destino_neto <= 0 or destino_neto > NETO_MAX_TN:
         raise HTTPException(status_code=400, detail=f"Valor inválido: neto_destino debe ser > 0 y <= {NETO_MAX_TN} Tn")
 
     if registro.pesaje_unico:
         for name in ("peso_bruto_origen", "tara_origen", "neto_origen"):
-            value = _decimal(name, getattr(registro, name), allow_none=True)
+            value = raw[name]
             if value is not None and value != 0:
                 raise HTTPException(status_code=400, detail=f"{name} debe ser 0 o estar ausente para pesaje único")
-        bruto = _decimal("peso_bruto_destino", registro.peso_bruto_destino)
-        tara = _decimal("tara_destino", registro.tara_destino)
+        bruto = raw["peso_bruto_destino"]
+        tara = raw["tara_destino"]
         for name, value in (("peso_bruto_destino", bruto), ("tara_destino", tara)):
             if value < 0 or value > NETO_MAX_TN:
                 raise HTTPException(status_code=400, detail=f"Valor inválido: {name}")
         if bruto <= tara or abs(bruto - tara - destino_neto) > PESO_TOLERANCIA_TN:
             raise HTTPException(status_code=400, detail="Pesos de destino inconsistentes")
-        return Decimal("0"), bruto, tara, destino_neto, destino_neto
+        bruto_db = _quantize(bruto)
+        tara_db = _quantize(tara)
+        neto_db = bruto_db - tara_db
+        return Decimal("0.00"), bruto_db, tara_db, neto_db, neto_db
 
-    origen_neto = _decimal("neto_origen", registro.neto_origen)
+    origen_neto = raw["neto_origen"]
     if origen_neto <= 0 or origen_neto > NETO_MAX_TN:
         raise HTTPException(status_code=400, detail=f"Valor inválido: neto_origen debe ser > 0 y <= {NETO_MAX_TN} Tn")
-    bruto = _decimal("peso_bruto_origen", registro.peso_bruto_origen, allow_none=True)
+    bruto = raw["peso_bruto_origen"]
     if bruto is None:
-        bruto = _decimal("peso_bruto_destino", registro.peso_bruto_destino)
-    tara = _decimal("tara_origen", registro.tara_origen, allow_none=True)
+        bruto = raw["peso_bruto_destino"]
+    tara = raw["tara_origen"]
     if tara is None:
-        tara = _decimal("tara_destino", registro.tara_destino, allow_none=True) or Decimal("0")
-    return origen_neto, bruto, tara, destino_neto, origen_neto
+        tara = raw["tara_destino"] or Decimal("0")
+    origen_db = _quantize(origen_neto)
+    return origen_db, _quantize(bruto), _quantize(tara), _quantize(destino_neto), origen_db
 
 
 def _build_record(registro, employee, equipo, proveedor_id, cliente_id, weights):

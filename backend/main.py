@@ -639,9 +639,9 @@ def create_registro_viaje(
     db: Session = Depends(get_db),
     current_user: models.Empleado = Depends(get_current_user),
 ):
-    if registro.chofer_id != current_user.id:
-        raise HTTPException(status_code=403, detail="El chofer debe coincidir con el usuario autenticado")
     try:
+        if registro.chofer_id != current_user.id:
+            raise HTTPException(status_code=403, detail="El chofer debe coincidir con el usuario autenticado")
         nuevo_registro = create_trip(db, registro, current_user)
         return {"id": nuevo_registro.id, "message": "Viaje registrado OK"}
     finally:
