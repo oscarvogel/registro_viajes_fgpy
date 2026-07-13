@@ -6,7 +6,7 @@ const online = ref(navigator.onLine)
 const updateAvailable = ref(false)
 
 function trySync() {
-  clientLogger.info('Usuario iniciÃ³ sincronizaciÃ³n manual', { event_type: 'user_action' })
+  clientLogger.info('Usuario inició sincronización manual', { event_type: 'user_action' })
   clientLogger.flush()
 }
 
@@ -45,11 +45,11 @@ onBeforeUnmount(() => {
     <div v-if="!online" role="status" class="mx-auto bg-yellow-50 border-l-4 border-yellow-400 text-yellow-700 p-3 rounded shadow">
       <div class="flex items-center justify-between gap-4">
         <div>
-          <strong class="block">Sin conexiÃ³n</strong>
-          <div class="text-sm">Tu dispositivo estÃ¡ sin conexiÃ³n. Los datos se guardarÃ¡n localmente y se sincronizarÃ¡n automÃ¡ticamente cuando vuelva la red.</div>
+          <strong class="block">Sin conexión</strong>
+          <div class="text-sm">Tu dispositivo está sin conexión. Los datos se guardarán localmente y se sincronizarán automáticamente cuando vuelva la red.</div>
         </div>
         <div class="flex items-center gap-2">
-          <button @click="trySync" class="bg-yellow-600 text-white px-3 py-1 rounded" aria-label="Reintentar sincronizaciÃ³n">Reintentar</button>
+          <button @click="trySync" class="bg-yellow-600 text-white px-3 py-1 rounded" aria-label="Reintentar sincronización">Reintentar</button>
         </div>
       </div>
     </div>
@@ -57,11 +57,11 @@ onBeforeUnmount(() => {
     <div v-if="updateAvailable" role="status" class="mx-auto bg-blue-50 border-l-4 border-blue-400 text-blue-700 p-3 mt-2 rounded shadow">
       <div class="flex items-center justify-between gap-4">
         <div>
-          <strong class="block">ActualizaciÃ³n disponible</strong>
-          <div class="text-sm">Hay una nueva versiÃ³n de la aplicaciÃ³n. Recarga para aplicar la actualizaciÃ³n.</div>
+          <strong class="block">Actualización disponible</strong>
+          <div class="text-sm">Hay una nueva versión de la aplicación. Recarga para aplicar la actualización.</div>
         </div>
         <div class="flex items-center gap-2">
-          <button @click="reloadForUpdate" class="bg-blue-600 text-white px-3 py-1 rounded" aria-label="Recargar aplicaciÃ³n">Recargar</button>
+          <button @click="reloadForUpdate" class="bg-blue-600 text-white px-3 py-1 rounded" aria-label="Recargar aplicación">Recargar</button>
         </div>
       </div>
     </div>

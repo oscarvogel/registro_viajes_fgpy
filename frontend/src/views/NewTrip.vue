@@ -144,8 +144,8 @@ const submitForm = async () => {
     if (numero_remision && !remitoPattern.test(numero_remision)) {
         Swal.fire({
             icon: 'warning',
-            title: 'Formato invÃ¡lido',
-            text: 'El NÂº Remito Proveedor debe tener formato 000-000-0000000',
+            title: 'Formato inválido',
+            text: 'El Nº Remito Proveedor debe tener formato 000-000-0000000',
             confirmButtonColor: '#007AFF'
         });
         return;
@@ -153,8 +153,8 @@ const submitForm = async () => {
     if (numero_remision_fpv && !remitoPattern.test(numero_remision_fpv)) {
         Swal.fire({
             icon: 'warning',
-            title: 'Formato invÃ¡lido',
-            text: 'El NÂº Remito FGPY debe tener formato 000-000-0000000',
+            title: 'Formato inválido',
+            text: 'El Nº Remito FGPY debe tener formato 000-000-0000000',
             confirmButtonColor: '#007AFF'
         });
         return;
@@ -174,7 +174,7 @@ const submitForm = async () => {
             Swal.fire({
                 icon: 'warning',
                 title: 'Remito duplicado',
-                text: 'Ese nÃºmero de remito ya estÃ¡ registrado (pendiente).',
+                text: 'Ese número de remito ya está registrado (pendiente).',
                 confirmButtonColor: '#007AFF'
             });
             return;
@@ -190,8 +190,8 @@ const submitForm = async () => {
 
             if (existsRes.data?.exists) {
                 const msg = existsRes.data.exists_proveedor
-                    ? 'El NÂº Remito Proveedor ya existe.'
-                    : 'El NÂº Remito FGPY ya existe.';
+                    ? 'El Nº Remito Proveedor ya existe.'
+                    : 'El Nº Remito FGPY ya existe.';
                 Swal.fire({
                     icon: 'warning',
                     title: 'Remito duplicado',
@@ -220,8 +220,8 @@ const submitForm = async () => {
         } else {
             Swal.fire({
                 icon: 'warning',
-                title: 'Pendiente de sincronizaciÃ³n',
-                text: 'El registro quedÃ³ guardado localmente y se enviarÃ¡ cuando haya conexiÃ³n.',
+                title: 'Pendiente de sincronización',
+                text: 'El registro quedó guardado localmente y se enviará cuando haya conexión.',
                 confirmButtonColor: '#007AFF'
             });
         }
@@ -278,9 +278,9 @@ const submitForm = async () => {
     <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-6 border border-amber-100 dark:border-amber-900/40">
         <div class="flex items-start justify-between gap-4">
             <div>
-                <div class="text-sm text-gray-500">Acceso rÃ¡pido</div>
-                <div class="text-lg font-semibold mt-1">Movimiento de carretÃ³n</div>
-                <div class="text-sm text-gray-500 mt-1">Registrar mÃ³vil, KM inicial/final, estado y mÃ¡quina transportada.</div>
+                <div class="text-sm text-gray-500">Acceso rápido</div>
+                <div class="text-lg font-semibold mt-1">Movimiento de carretón</div>
+                <div class="text-sm text-gray-500 mt-1">Registrar móvil, KM inicial/final, estado y máquina transportada.</div>
             </div>
             <button @click="router.push('/carreton-move')" class="shrink-0 bg-amber-600 hover:bg-amber-700 text-white px-4 py-2 rounded-lg font-medium">
                 Abrir
@@ -291,11 +291,11 @@ const submitForm = async () => {
     <form @submit.prevent="submitForm" class="space-y-4">
         <div class="grid grid-cols-2 gap-4">
             <div>
-                <label class="block text-xs font-medium text-gray-500 mb-1">Fecha RemisiÃ³n Prov.</label>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Fecha Remisión Prov.</label>
                 <input v-model="form.fecha_remision" type="date" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white">
             </div>
             <div>
-                <label class="block text-xs font-medium text-gray-500 mb-1">Fecha RecepciÃ³n</label>
+                <label class="block text-xs font-medium text-gray-500 mb-1">Fecha Recepción</label>
                 <input v-model="form.fecha_recepcion" type="date" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white">
             </div>
         </div>
@@ -323,7 +323,7 @@ const submitForm = async () => {
         </div>
 
         <div>
-            <label class="block text-xs font-medium text-gray-500 mb-1">NÂº Remito Proveedor</label>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Nº Remito Proveedor</label>
             <div class="grid grid-cols-3 gap-2">
                 <input
                     v-model="form.remito_prov_tipo"
@@ -350,10 +350,10 @@ const submitForm = async () => {
                     @blur="onRemitoPadNumero('remito_prov_numero')"
                     class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white text-center">
             </div>
-            <div class="text-xs text-gray-400 mt-1">Tipo - Sucursal - NÃºmero</div>
+            <div class="text-xs text-gray-400 mt-1">Tipo - Sucursal - Número</div>
         </div>
         <div>
-            <label class="block text-xs font-medium text-gray-500 mb-1">NÂº Remito FGPY (Interno)</label>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Nº Remito FGPY (Interno)</label>
             <div class="grid grid-cols-3 gap-2">
                 <input
                     v-model="form.remito_fpv_tipo"
@@ -380,7 +380,7 @@ const submitForm = async () => {
                     @blur="onRemitoPadNumero('remito_fpv_numero')"
                     class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white text-center">
             </div>
-            <div class="text-xs text-gray-400 mt-1">Tipo - Sucursal - NÃºmero</div>
+            <div class="text-xs text-gray-400 mt-1">Tipo - Sucursal - Número</div>
         </div>
 
         <div class="grid grid-cols-2 gap-4">
@@ -396,7 +396,7 @@ const submitForm = async () => {
 
         <div>
             <label class="block text-xs font-medium text-gray-500 mb-1">Neto Destino (Tn)</label>
-            <input v-model.number="form.neto_destino" type="number" step="0.01" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white" placeholder="Calculado automÃ¡ticamente">
+            <input v-model.number="form.neto_destino" type="number" step="0.01" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white" placeholder="Calculado automáticamente">
         </div>
         <div></div>
         <div class="text-xs text-gray-400 -mt-2">Neto Destino precalculado: {{ calculatedNet }} Tn</div>

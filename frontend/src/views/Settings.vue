@@ -27,7 +27,7 @@ const defaultPatente = ref('');
 const defaultUnidadNegocio = ref('');
 const isAdmin = computed(() => isAdminSession());
 
-// Sistema de instalaciÃ³n mejorado
+// Sistema de instalación mejorado
 const {
     canInstall,
     isInstalled,
@@ -41,21 +41,21 @@ const {
 const installMessage = ref('');
 const showInstructions = ref(false);
 
-// Texto del botÃ³n segÃºn la plataforma
+// Texto del botón según la plataforma
 const installButtonText = computed(() => {
     if (isInstalled.value) return 'App instalada âœ“';
-    if (platform.value === 'ios') return 'Ver instrucciones de instalaciÃ³n';
+    if (platform.value === 'ios') return 'Ver instrucciones de instalación';
     return 'Instalar app';
 });
 
 // Mensaje de estado
 const installStatusMessage = computed(() => {
-    if (isInstalled.value) return 'La app ya estÃ¡ instalada en tu dispositivo';
+    if (isInstalled.value) return 'La app ya está instalada en tu dispositivo';
     if (platform.value === 'ios' && !isIOSSafari) {
-        return 'Para instalar en iPhone/iPad, abre esta pÃ¡gina en Safari';
+        return 'Para instalar en iPhone/iPad, abre esta página en Safari';
     }
     if (!canInstall.value && !isInstalled.value) {
-        return 'La instalaciÃ³n no estÃ¡ disponible en este momento';
+        return 'La instalación no está disponible en este momento';
     }
     return '';
 });
@@ -111,9 +111,9 @@ const handleInstallClick = async () => {
             installMessage.value = 'App instalada correctamente';
         }, 1000);
     } else if (result.outcome === 'dismissed') {
-        installMessage.value = 'InstalaciÃ³n cancelada';
+        installMessage.value = 'Instalación cancelada';
     } else if (result.outcome === 'unavailable') {
-        installMessage.value = 'InstalaciÃ³n no disponible';
+        installMessage.value = 'Instalación no disponible';
     }
 };
 
@@ -141,11 +141,11 @@ const doSync = async () => {
         const eqCount = result.equipos ?? 0;
         const panCount = result.panioles ?? 0;
         const unCount = result.unidadesNegocio ?? 0;
-        syncMessage.value = `SincronizaciÃ³n completada â€” Empleados: ${empCount}, Proveedores: ${provCount}, Equipos: ${eqCount}, PaÃ±oles: ${panCount}, UN: ${unCount}`;
+        syncMessage.value = `Sincronización completada — Empleados: ${empCount}, Proveedores: ${provCount}, Equipos: ${eqCount}, Pañoles: ${panCount}, UN: ${unCount}`;
         syncSuccess.value = true;
     } catch (e) {
         safeConsole.error('Sync failed', e?.message);
-        syncMessage.value = 'Error de sincronizaciÃ³n';
+        syncMessage.value = 'Error de sincronización';
     } finally {
         setTimeout(() => {
             syncing.value = false;
@@ -170,22 +170,22 @@ const doForceFullSync = async () => {
         const clientVersion = normalize(rawClient) || 'unknown';
 
         if (serverRelease !== 'unknown' && clientVersion !== 'unknown' && serverRelease === clientVersion) {
-            await Swal.fire({ title: 'SincronizaciÃ³n', text: 'La app en este dispositivo ya coincide con la versiÃ³n del servidor.', icon: 'info' });
+            await Swal.fire({ title: 'Sincronización', text: 'La app en este dispositivo ya coincide con la versión del servidor.', icon: 'info' });
             return;
         }
 
         const online = navigator.onLine === undefined ? true : navigator.onLine;
         if (!online) {
-            await Swal.fire({ title: 'SincronizaciÃ³n', text: 'Hay una actualizaciÃ³n disponible pero el dispositivo estÃ¡ sin conexiÃ³n. ConÃ©ctese y vuelva a intentar.', icon: 'warning' });
+            await Swal.fire({ title: 'Sincronización', text: 'Hay una actualización disponible pero el dispositivo está sin conexión. Conéctese y vuelva a intentar.', icon: 'warning' });
             return;
         }
 
         const confirm = await Swal.fire({
-            title: 'Actualizar aplicaciÃ³n',
-            text: 'Se detectÃ³ una nueva versiÃ³n en el servidor. Se realizarÃ¡ la sincronizaciÃ³n de datos y se intentarÃ¡ actualizar la app. Â¿Desea continuar?',
+            title: 'Actualizar aplicación',
+            text: 'Se detectó una nueva versión en el servidor. Se realizará la sincronización de datos y se intentará actualizar la app. ¿Desea continuar?',
             icon: 'question',
             showCancelButton: true,
-            confirmButtonText: 'SÃ­, actualizar',
+            confirmButtonText: 'Sí, actualizar',
             cancelButtonText: 'Cancelar'
         });
 
@@ -202,8 +202,8 @@ const doForceFullSync = async () => {
                     const swResult = await updateServiceWorkerAndDetectIndexChange(reg);
                     if (swResult.changed) {
                         await Swal.fire({
-                            title: 'ActualizaciÃ³n detectada',
-                            text: 'Se detectÃ³ una nueva versiÃ³n de la app. Se recargarÃ¡ automÃ¡ticamente.',
+                            title: 'Actualización detectada',
+                            text: 'Se detectó una nueva versión de la app. Se recargará automáticamente.',
                             icon: 'success',
                             timer: 1200,
                             showConfirmButton: false
@@ -213,21 +213,21 @@ const doForceFullSync = async () => {
                     }
                 }
             }
-            await Swal.fire({ title: 'Hecho', text: 'SincronizaciÃ³n completada. No se detectaron cambios de versiÃ³n en la app.', icon: 'info' });
+            await Swal.fire({ title: 'Hecho', text: 'Sincronización completada. No se detectaron cambios de versión en la app.', icon: 'info' });
         } catch (err) {
             safeConsole.warn('Service worker update failed', err?.message);
-            await Swal.fire({ title: 'SincronizaciÃ³n', text: 'SincronizaciÃ³n completada pero no se pudo actualizar automÃ¡ticamente el servicio. Recargue manualmente.', icon: 'warning' });
+            await Swal.fire({ title: 'Sincronización', text: 'Sincronización completada pero no se pudo actualizar automáticamente el servicio. Recargue manualmente.', icon: 'warning' });
         }
     } catch (e) {
         safeConsole.error('Force full sync failed', e?.message);
-        await Swal.fire({ title: 'Error', text: 'No se pudo comprobar la versiÃ³n del servidor. Intente mÃ¡s tarde.', icon: 'error' });
+        await Swal.fire({ title: 'Error', text: 'No se pudo comprobar la versión del servidor. Intente más tarde.', icon: 'error' });
     }
 }
 
 const doFetchCatalogues = async () => {
     catalogLoading.value = true;
     catalogSuccess.value = false;
-    catalogMessage.value = 'Actualizando catÃ¡logos...';
+    catalogMessage.value = 'Actualizando catálogos...';
     try {
         const res = await catalog.fetchCatalogues();
         const empCount = res?.empleados ?? 0;
@@ -235,11 +235,11 @@ const doFetchCatalogues = async () => {
         const eqCount = res?.equipos ?? 0;
         const panCount = res?.panioles ?? 0;
         const unCount = res?.unidadesNegocio ?? 0;
-        catalogMessage.value = `CatÃ¡logos actualizados â€” Empleados: ${empCount}, Proveedores: ${provCount}, Equipos: ${eqCount}, PaÃ±oles: ${panCount}, UN: ${unCount}`;
+        catalogMessage.value = `Catálogos actualizados — Empleados: ${empCount}, Proveedores: ${provCount}, Equipos: ${eqCount}, Pañoles: ${panCount}, UN: ${unCount}`;
         catalogSuccess.value = true;
     } catch (e) {
         safeConsole.error('Catalog update failed', e?.message);
-        catalogMessage.value = 'Error al actualizar catÃ¡logos';
+        catalogMessage.value = 'Error al actualizar catálogos';
     } finally {
         catalogLoading.value = false;
         setTimeout(() => {
@@ -261,7 +261,7 @@ const doFetchCatalogues = async () => {
         </div>
 
         <div class="p-4 border-b dark:border-gray-700">
-            <label class="block text-xs font-medium text-gray-500 mb-1">VehÃ­culo Predeterminado</label>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Vehículo Predeterminado</label>
             <select v-model="defaultPatente" @change="saveDefaultPatente" class="w-full p-2 rounded border dark:bg-gray-700 dark:border-gray-600 dark:text-white">
                 <option value="">Sin defecto</option>
                 <option v-for="e in catalog.equipos.filter(x => x.tipo_movil_id === 4)" :key="e.id" :value="e.patente">{{ e.descripcion }} ({{ e.patente }})</option>
@@ -278,8 +278,8 @@ const doFetchCatalogues = async () => {
 
         <div class="p-4 border-b dark:border-gray-700 flex items-center justify-between gap-4">
             <div>
-                <div class="font-medium">Movimiento de carretÃ³n</div>
-                <div class="text-sm text-gray-500 mt-1">Registrar KM inicial/final, estado y mÃ¡quina transportada.</div>
+                <div class="font-medium">Movimiento de carretón</div>
+                <div class="text-sm text-gray-500 mt-1">Registrar KM inicial/final, estado y máquina transportada.</div>
             </div>
             <button @click="router.push('/carreton-move')" class="bg-amber-600 hover:bg-amber-700 text-white font-medium py-2 px-4 rounded">
                 Abrir
@@ -294,9 +294,9 @@ const doFetchCatalogues = async () => {
                     </svg>
                 </div>
                 <div class="flex-1">
-                    <div class="font-medium">Instalar aplicaciÃ³n</div>
+                    <div class="font-medium">Instalar aplicación</div>
                     <div class="text-sm text-gray-500 mt-1">
-                        Instala la app para acceso rÃ¡pido y funcionamiento offline.
+                        Instala la app para acceso rápido y funcionamiento offline.
                     </div>
                     <div v-if="platform === 'ios'" class="mt-2 text-xs text-blue-600 dark:text-blue-400 flex items-center gap-1">
                         <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
@@ -330,7 +330,7 @@ const doFetchCatalogues = async () => {
         </div>
 
         <div class="p-4 border-b dark:border-gray-700">
-            <div class="font-medium">SincronizaciÃ³n</div>
+            <div class="font-medium">Sincronización</div>
             <div class="text-sm text-gray-500 mb-3">Estado: {{ catalog.isOffline ? 'Offline' : 'Conectado' }}</div>
             <div class="flex gap-2">
                 <button @click="doForceFullSync" :disabled="syncing || catalogLoading" class="flex-1 bg-amber-600 hover:bg-amber-700 text-white font-medium py-2 px-3 rounded flex items-center justify-center gap-2">
@@ -360,11 +360,11 @@ const doFetchCatalogues = async () => {
             </button>
         </div>
         <div class="p-4">
-            <button class="text-red-500 w-full text-left" @click="logout">Cerrar SesiÃ³n</button>
+            <button class="text-red-500 w-full text-left" @click="logout">Cerrar Sesión</button>
         </div>
     </div>
 
-    <!-- Modal de instrucciones de instalaciÃ³n -->
+    <!-- Modal de instrucciones de instalación -->
     <InstallPrompt
         :show="showInstructions || showIOSInstructions"
         :platform="platform"

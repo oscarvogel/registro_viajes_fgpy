@@ -52,7 +52,7 @@ app.use(pinia)
 app.use(router)
 app.use(loggerPlugin) // Instalar logger
 
-// Logging de navegaciÃ³n
+// Logging de navegación
 router.beforeEach((to, from) => {
   if (from.name) {
     clientLogger.logNavigation(from.path, to.path)
