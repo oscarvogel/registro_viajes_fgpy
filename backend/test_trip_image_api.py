@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch, AsyncMock
 import tempfile
 import asyncio
+import threading
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
@@ -429,6 +430,11 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         missing = TripImageService(db, storage, vision).analyze(b"\xff\xd8\xfflast", "b.jpg", "image/jpeg")
         self.assertIsNone(missing["proposal"]["proveedor_id"])
 
+        vision_data["proveedor_candidato"] = "\u00d1and\u00fa S.A."
+        db.add(models.Proveedor(id=9, razon_social="NANDU SRL", activo=True)); db.commit()
+        accented = TripImageService(db, storage, vision).analyze(b"\xff\xd8\xffaccent", "c.jpg", "image/jpeg")
+        self.assertEqual(accented["proposal"]["proveedor_id"], 9)
+
     def test_confirm_schema_does_not_accept_identity_fields(self):
         from schemas import TripImageConfirmRequest
         with self.assertRaises(ValueError):
@@ -610,7 +616,7 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         upload = Upload()
         with patch("main.get_trip_image_storage", return_value=storage):
             with self.assertRaises(HTTPException) as too_large:
-                asyncio.run(main.analyze_trip_image(upload, object(), object()))
+                asyncio.run(main.analyze_trip_image(upload, object()))
         self.assertEqual(upload.requested, 6)
         self.assertEqual(too_large.exception.status_code, 413)
 
@@ -622,12 +628,29 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         class Upload:
             filename = "x.jpg"; content_type = "image/jpeg"
             async def read(self, size): return b"\xff\xd8\xffx"
-        expected = {"upload_token": "token", "proposal": {}}
-        runner = AsyncMock(return_value=expected)
-        with patch("main.get_trip_image_storage", return_value=storage), patch("main.get_trip_image_vision", return_value=object()), patch("main.run_in_threadpool", runner):
-            result = asyncio.run(main.analyze_trip_image(Upload(), object(), object()))
-        self.assertEqual(result, expected)
-        runner.assert_awaited_once()
+        events = []
+        class Query:
+            def filter(self, *args): events.append(("query", threading.get_ident())); return self
+            def all(self): return []
+        class WorkerSession:
+            def query(self, *models): return Query()
+            def close(self): events.append(("close", threading.get_ident()))
+        def factory(): events.append(("open", threading.get_ident())); return WorkerSession()
+        vision_data = {
+            "fecha_remision":"2026-07-13", "remito_tipo":"002", "remito_sucursal":"003", "remito_numero":"0003677",
+            "proveedor_candidato":"Sin Match", "peso_bruto":49690, "tara":17080, "neto":32610, "unidad_peso":"kg",
+            "patente_observada":None, "chofer_observado":None, "confidence":{}, "warnings":[],
+        }
+        vision = type("Vision", (), {"analyze": lambda self, path: (events.append(("vision", threading.get_ident())) or vision_data)})()
+        caller_thread = threading.get_ident()
+        with patch("main.get_trip_image_storage", return_value=storage), patch("main.get_trip_image_vision", return_value=vision), patch.object(main.database, "SessionLocal", factory):
+            result = asyncio.run(main.analyze_trip_image(Upload(), object()))
+        self.assertIn("upload_token", result)
+        worker_threads = {thread_id for _, thread_id in events}
+        self.assertEqual(len(worker_threads), 1)
+        self.assertNotIn(caller_thread, worker_threads)
+        self.assertEqual([name for name, _ in events][0], "open")
+        self.assertEqual([name for name, _ in events][-1], "close")
 
     def test_confirmation_factory_does_not_construct_vision(self):
         import main
@@ -636,6 +659,28 @@ class TripImageEndpointServiceTest(unittest.TestCase):
             service = main.get_trip_image_service(db)
         self.assertIsNone(service.vision)
         vision.assert_not_called()
+
+    def test_analysis_worker_closes_session_on_vision_error(self):
+        import main
+        from image_storage import ImageStorage
+        from minimax_vision import MiniMaxVisionError
+        root = tempfile.TemporaryDirectory(); self.addCleanup(root.cleanup)
+        storage = ImageStorage(Path(root.name).resolve(), "x" * 32)
+        events = []
+        class Session:
+            def close(self): events.append(("close", threading.get_ident()))
+        def factory(): events.append(("open", threading.get_ident())); return Session()
+        class Vision:
+            def analyze(self, path): events.append(("vision", threading.get_ident())); raise MiniMaxVisionError("safe")
+        class Upload:
+            filename = "x.jpg"; content_type = "image/jpeg"
+            async def read(self, size): return b"\xff\xd8\xffx"
+        with patch("main.get_trip_image_storage", return_value=storage), patch("main.get_trip_image_vision", return_value=Vision()), patch.object(main.database, "SessionLocal", factory):
+            with self.assertRaises(HTTPException) as caught:
+                asyncio.run(main.analyze_trip_image(Upload(), object()))
+        self.assertEqual(caught.exception.status_code, 502)
+        self.assertEqual([name for name, _ in events], ["open", "vision", "close"])
+        self.assertEqual(len({thread_id for _, thread_id in events}), 1)
 
     def test_testclient_image_access_owner_admin_other_missing_and_expired(self):
         sentry_sdk = types.ModuleType("sentry_sdk"); sentry_sdk.init = lambda *a, **k: None

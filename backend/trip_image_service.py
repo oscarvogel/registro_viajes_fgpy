@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import hashlib
-import re
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import func, or_
 from sqlalchemy.orm import sessionmaker
 
 import models
@@ -30,16 +28,9 @@ class TripImageService:
         temporary = self.storage.save_temp(data, original_name, mime_type)
         raw = self.vision.analyze(self.storage.resolve_temp(temporary.token).path)
         normalized = normalize_extraction(raw)
-        raw_tokens = re.findall(r"[^\W_]+", str(raw.get("proveedor_candidato") or ""), re.UNICODE)
-        useful_tokens = [(normalize_provider_name(token), token) for token in raw_tokens]
-        useful_tokens = [(key, token) for key, token in useful_tokens if key and key in normalized.proveedor_normalizado]
-        candidates = []
-        if useful_tokens:
-            _, token = max(useful_tokens, key=lambda item: len(item[0]))
-            candidates = self.db.query(models.Proveedor).filter(
-                models.Proveedor.activo.is_(True),
-                or_(func.lower(models.Proveedor.razon_social).contains(token.lower()), models.Proveedor.razon_social.contains(token)),
-            ).all()
+        candidates = self.db.query(models.Proveedor.id, models.Proveedor.razon_social).filter(
+            models.Proveedor.activo.is_(True)
+        ).all()
         matches = [row for row in candidates if normalize_provider_name(row.razon_social) == normalized.proveedor_normalizado]
         warnings = list(raw.get("warnings", []))
         provider_id = matches[0].id if len(matches) == 1 else None

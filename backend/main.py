@@ -652,6 +652,16 @@ def get_trip_image_service(db: Session):
     return TripImageService(db, get_trip_image_storage(), session_factory=database.SessionLocal)
 
 
+def analyze_trip_image_in_worker(data, original_name, mime_type, storage, session_factory=None):
+    factory = session_factory or database.SessionLocal
+    db = factory()
+    try:
+        service = TripImageService(db, storage, get_trip_image_vision(), session_factory=factory)
+        return service.analyze(data, original_name, mime_type)
+    finally:
+        db.close()
+
+
 @api_router.post("/registro-viaje", response_model=schemas.RegistroViajeResponse)
 def create_registro_viaje(
     registro: schemas.RegistroViajeCreate,
@@ -668,14 +678,13 @@ def create_registro_viaje(
 
 
 @api_router.post("/registro-viaje/imagen/analizar", response_model=schemas.TripImageAnalysisResponse)
-async def analyze_trip_image(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: models.Empleado = Depends(get_current_user)):
+async def analyze_trip_image(file: UploadFile = File(...), current_user: models.Empleado = Depends(get_current_user)):
     try:
         storage = get_trip_image_storage()
         data = await file.read(storage.max_bytes + 1)
         if len(data) > storage.max_bytes:
             raise HTTPException(413, "La imagen excede el limite permitido")
-        service = TripImageService(db, storage, get_trip_image_vision(), session_factory=database.SessionLocal)
-        return await run_in_threadpool(service.analyze, data, file.filename or "image", file.content_type or "")
+        return await run_in_threadpool(analyze_trip_image_in_worker, data, file.filename or "image", file.content_type or "", storage)
     except ImageStorageConfigError:
         raise HTTPException(503, "Servicio de imagen no disponible")
     except (ImageValidationError, ImageStoragePathError) as exc:
