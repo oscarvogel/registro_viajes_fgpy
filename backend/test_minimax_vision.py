@@ -296,6 +296,15 @@ class MiniMaxVisionClientTests(unittest.TestCase):
                 env=os.environ.copy(), timeout_seconds=10, max_output_bytes=4096,
             )
 
+    def test_valid_final_response_cannot_race_later_oversized_stderr(self):
+        for attempt in range(5):
+            with self.subTest(attempt=attempt):
+                with self.assertRaises(OverflowError):
+                    _SubprocessExecutor()(
+                        argv=self._fake_mcp_argv("late_stderr"), messages=self._protocol_messages(),
+                        env=os.environ.copy(), timeout_seconds=10, max_output_bytes=4096,
+                    )
+
     def test_windows_process_group_and_tree_kill_are_requested(self):
         if os.name != "nt":
             self.skipTest("Windows-specific process tree contract")
@@ -328,13 +337,16 @@ class MiniMaxVisionClientTests(unittest.TestCase):
                 sys.stdout.buffer.write(b"x" * 20000); sys.stdout.buffer.flush()
                 sys.stdin.read(); raise SystemExit
             init = json.loads(sys.stdin.readline())
-            sys.stderr.buffer.write(b"e" * 65536); sys.stderr.buffer.flush()
+            if mode != "late_stderr":
+                sys.stderr.buffer.write(b"e" * 65536); sys.stderr.buffer.flush()
             print(json.dumps({"jsonrpc":"2.0","id":init["id"],"result":{}}), flush=True)
             notification = json.loads(sys.stdin.readline())
             call = json.loads(sys.stdin.readline())
             assert notification["method"] == "notifications/initialized"
             assert call["method"] == "tools/call"
             print(json.dumps({"jsonrpc":"2.0","id":call["id"],"result":{"content":[{"type":"text","text":"{}"}]}}), flush=True)
+            if mode == "late_stderr":
+                sys.stderr.buffer.write(b"z" * 100000); sys.stderr.buffer.flush()
         ''')
         return [sys.executable, "-u", "-c", code, mode]
 

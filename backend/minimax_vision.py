@@ -99,6 +99,7 @@ class _SubprocessExecutor:
         )
         chunks: queue.Queue[Any] = queue.Queue(maxsize=32)
         budget_lock = threading.Lock()
+        overflow_event = threading.Event()
         total = 0
 
         def reader(kind, stream):
@@ -112,6 +113,8 @@ class _SubprocessExecutor:
                     with budget_lock:
                         total += len(data)
                         exceeded = total > max_output_bytes
+                        if exceeded:
+                            overflow_event.set()
                     chunks.put(("overflow" if exceeded else kind, b"" if exceeded else data))
                     if exceeded:
                         break
@@ -120,8 +123,12 @@ class _SubprocessExecutor:
             finally:
                 chunks.put(("eof", kind))
 
-        threading.Thread(target=reader, args=("stdout", proc.stdout), daemon=True).start()
-        threading.Thread(target=reader, args=("stderr", proc.stderr), daemon=True).start()
+        readers = [
+            threading.Thread(target=reader, args=("stdout", proc.stdout), daemon=True),
+            threading.Thread(target=reader, args=("stderr", proc.stderr), daemon=True),
+        ]
+        for thread in readers:
+            thread.start()
         deadline = time.monotonic() + timeout_seconds
         stdout_buffer = bytearray()
         try:
@@ -156,10 +163,14 @@ class _SubprocessExecutor:
                         continue
                     break
                 if "error" in response:
-                    return response
-            return response
+                    break
         finally:
             try:
+                if proc.stdin:
+                    try:
+                        proc.stdin.close()
+                    except Exception:
+                        pass
                 if proc.poll() is None:
                     try:
                         if os.name == "nt" and getattr(proc, "pid", None):
@@ -193,6 +204,14 @@ class _SubprocessExecutor:
                             proc.wait(timeout=2)
                         except Exception:
                             pass
+                drain_deadline = time.monotonic() + 2
+                while any(thread.is_alive() for thread in readers) and time.monotonic() < drain_deadline:
+                    try:
+                        chunks.get(timeout=0.02)
+                    except queue.Empty:
+                        pass
+                for thread in readers:
+                    thread.join(timeout=max(0, drain_deadline - time.monotonic()))
             finally:
                 for handle in (proc.stdin, proc.stdout, proc.stderr):
                     if handle:
@@ -200,6 +219,9 @@ class _SubprocessExecutor:
                             handle.close()
                         except Exception:
                             pass
+        if overflow_event.is_set():
+            raise OverflowError
+        return response
 
     @staticmethod
     def _send(proc, message):
