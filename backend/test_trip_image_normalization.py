@@ -122,6 +122,36 @@ class NormalizeExtractionTests(unittest.TestCase):
         with self.assertRaisesRegex(ExtractionValidationError, "remito"):
             normalize_extraction(data)
 
+    def test_rejects_whitespace_around_full_remito(self):
+        data = self.valid_data()
+        for key in ("remito_tipo", "remito_sucursal", "remito_numero"):
+            data.pop(key)
+        data["numero_remision_fpv"] = " 002-003-0003677 "
+        with self.assertRaisesRegex(ExtractionValidationError, "remito"):
+            normalize_extraction(data)
+
+    def test_rejects_non_ascii_digits_in_full_remito(self):
+        for remito in ("٠٠٢-٠٠٣-٠٠٠٣٦٧٧", "００２-００３-０００３６７７"):
+            data = self.valid_data()
+            for key in ("remito_tipo", "remito_sucursal", "remito_numero"):
+                data.pop(key)
+            data["numero_remision_fpv"] = remito
+            with self.subTest(remito=remito), self.assertRaisesRegex(
+                ExtractionValidationError, "remito"
+            ):
+                normalize_extraction(data)
+
+    def test_rejects_non_ascii_digits_in_separate_remito_parts(self):
+        for parts in (
+            {"remito_tipo": "٢"},
+            {"remito_sucursal": "３"},
+            {"remito_numero": "٣٦٧٧"},
+        ):
+            with self.subTest(parts=parts), self.assertRaisesRegex(
+                ExtractionValidationError, "remito"
+            ):
+                normalize_extraction(self.valid_data(**parts))
+
     def test_rejects_missing_or_unsupported_unit(self):
         for unit in (None, "", "kgs", "lb", "ton"):
             with self.subTest(unit=unit), self.assertRaisesRegex(
@@ -158,6 +188,16 @@ class NormalizeExtractionTests(unittest.TestCase):
                 ExtractionValidationError, "peso"
             ):
                 normalize_extraction(self.valid_data(peso_bruto=weight))
+
+    def test_wraps_extreme_decimal_quantize_failure_as_domain_error(self):
+        with self.assertRaises(ExtractionValidationError):
+            normalize_extraction(
+                self.valid_data(
+                    peso_bruto=Decimal("2e100"),
+                    tara=Decimal("1e100"),
+                    neto=Decimal("1e100"),
+                )
+            )
 
 
 class ProviderNameNormalizationTests(unittest.TestCase):

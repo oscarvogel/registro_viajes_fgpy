@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, DecimalException, InvalidOperation
 import re
 import unicodedata
 from typing import Any, Mapping
@@ -10,7 +10,7 @@ from typing import Any, Mapping
 
 _TONNE_QUANTUM = Decimal("0.001")
 _WEIGHT_TOLERANCE = Decimal("0.010")
-_FULL_REMITO = re.compile(r"^(\d{3})-(\d{3})-(\d{7})$")
+_FULL_REMITO = re.compile(r"^([0-9]{3})-([0-9]{3})-([0-9]{7})$")
 
 
 class ExtractionValidationError(ValueError):
@@ -75,7 +75,7 @@ def _parse_date(value: Any) -> date:
 def _normalize_remito(data: Mapping[str, Any]) -> str:
     full = data.get("numero_remision_fpv")
     if full is not None:
-        normalized_full = str(full).strip()
+        normalized_full = str(full)
         if not _FULL_REMITO.fullmatch(normalized_full):
             raise ExtractionValidationError("numero de remito invalido")
         return normalized_full
@@ -85,7 +85,7 @@ def _normalize_remito(data: Mapping[str, Any]) -> str:
     for field, width in widths:
         raw = data.get(field)
         part = "" if raw is None else str(raw).strip()
-        if not part.isdigit() or len(part) > width:
+        if not re.fullmatch(r"[0-9]+", part) or len(part) > width:
             raise ExtractionValidationError("partes del remito incompletas o invalidas")
         normalized_parts.append(part.zfill(width))
     return "-".join(normalized_parts)
@@ -127,17 +127,25 @@ def normalize_extraction(data: Mapping[str, Any]) -> NormalizedExtraction:
     if not isinstance(unit, str) or unit.strip().lower() != "kg":
         raise ExtractionValidationError("unidad de peso faltante o no soportada")
 
-    bruto = _weight_in_tonnes(data.get("peso_bruto"))
-    tara = _weight_in_tonnes(data.get("tara"))
-    neto = _weight_in_tonnes(data.get("neto"))
-    if abs((bruto - tara) - neto) > _WEIGHT_TOLERANCE:
-        raise ExtractionValidationError("pesos inconsistentes: bruto - tara no coincide con neto")
+    try:
+        bruto = _weight_in_tonnes(data.get("peso_bruto"))
+        tara = _weight_in_tonnes(data.get("tara"))
+        neto = _weight_in_tonnes(data.get("neto"))
+        if abs((bruto - tara) - neto) > _WEIGHT_TOLERANCE:
+            raise ExtractionValidationError(
+                "pesos inconsistentes: bruto - tara no coincide con neto"
+            )
+        bruto_destino = bruto.quantize(_TONNE_QUANTUM)
+        tara_destino = tara.quantize(_TONNE_QUANTUM)
+        neto_destino = neto.quantize(_TONNE_QUANTUM)
+    except DecimalException as error:
+        raise ExtractionValidationError("peso fuera del rango soportado") from error
 
     return NormalizedExtraction(
         fecha_remision=_parse_date(data.get("fecha_remision")),
         numero_remision_fpv=_normalize_remito(data),
-        peso_bruto_destino=bruto.quantize(_TONNE_QUANTUM),
-        tara_destino=tara.quantize(_TONNE_QUANTUM),
-        neto_destino=neto.quantize(_TONNE_QUANTUM),
+        peso_bruto_destino=bruto_destino,
+        tara_destino=tara_destino,
+        neto_destino=neto_destino,
         proveedor_normalizado=normalize_provider_name(data.get("proveedor_candidato")),
     )
