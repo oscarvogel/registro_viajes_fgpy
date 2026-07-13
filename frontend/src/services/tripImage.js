@@ -3,18 +3,11 @@ import { API_URL } from '../config.js'
 
 const endpoint = (apiUrl, path) => `${String(apiUrl).replace(/\/$/, '')}${path}`
 
-const isFileLike = (value) => (
-  value != null
-  && typeof value.name === 'string'
-  && value.name.trim() !== ''
-  && typeof value.arrayBuffer === 'function'
-  && typeof value.type === 'string'
-)
-
 export const analyzeTripImage = async (file, httpClient = axios, apiUrl = API_URL) => {
-  if (!isFileLike(file)) throw new TypeError('Seleccioná una imagen válida.')
+  if (typeof Blob === 'undefined' || !(file instanceof Blob)) throw new TypeError('Seleccioná una imagen válida.')
   const body = new FormData()
-  body.append('file', file)
+  const filename = typeof file.name === 'string' && file.name.trim() ? file.name.trim() : 'image'
+  body.append('file', file, filename)
   const response = await httpClient.post(endpoint(apiUrl, '/registro-viaje/imagen/analizar'), body)
   return response.data
 }

@@ -15,7 +15,7 @@ import {
   transitionReviewState,
 } from '../src/services/tripImageReview.js'
 
-const file = () => Object.assign(new Blob(['image'], { type: 'image/jpeg' }), { name: 'ticket.jpg' })
+const file = () => new Blob(['image'], { type: 'image/jpeg' })
 
 test('analyzeTripImage posts only browser FormData and returns response data', async () => {
   let request
@@ -35,6 +35,7 @@ test('analyzeTripImage rejects missing and non file-like input before HTTP', asy
   const http = { post: async () => { calls += 1 } }
   await assert.rejects(() => analyzeTripImage(null, http), /imagen/i)
   await assert.rejects(() => analyzeTripImage({ name: 'x.jpg' }, http), /imagen/i)
+  await assert.rejects(() => analyzeTripImage({ name: 'fake.jpg', type: 'image/jpeg', arrayBuffer: async () => new ArrayBuffer(0) }, http), /imagen/i)
   assert.equal(calls, 0)
 })
 
@@ -71,20 +72,25 @@ const catalog = {
   empleados: [{ id: 7, nombre: 'Ana', activo: true }],
   equipos: [{ id: 2, patente: 'AB 123 CD', activo: true }],
   unidadesNegocio: [{ id: 4, nombre: 'Forestal', activo: true }],
+  proveedores: [{ id: 8, nombre: 'Proveedor', activo: true }, { id: 9, nombre: 'Inactivo', activo: false }],
 }
 
 test('readTripImageSettings parses storage, normalizes config and matches active catalogs', () => {
   const result = readTripImageSettings({ storage: storage({ user: '{"id":7}', default_patente: ' ab 123 cd ', default_unidad_negocio: '4' }), catalog })
   assert.deepEqual(result, {
-    user: catalog.empleados[0], patente: 'AB 123 CD', equipo: catalog.equipos[0],
-    unidadNegocioId: 4, unidadNegocio: catalog.unidadesNegocio[0], missing: [], errors: [], complete: true,
+    userId: 7, user: catalog.empleados[0], patente: 'AB 123 CD', equipoId: 2, equipo: catalog.equipos[0],
+    unidadNegocioId: 4, unidadNegocio: catalog.unidadesNegocio[0], activeProviderIds: [8],
+    missing: [], errors: [], complete: true,
   })
+  assert.ok(Object.isFrozen(result))
+  assert.ok(Object.isFrozen(result.user) && Object.isFrozen(result.equipo) && Object.isFrozen(result.unidadNegocio))
+  assert.ok(Object.isFrozen(result.activeProviderIds) && Object.isFrozen(result.missing) && Object.isFrozen(result.errors))
 })
 
 test('readTripImageSettings safely reports corrupt, missing or inactive settings', () => {
   const result = readTripImageSettings({ storage: storage({ user: 'oops', default_patente: 'XX', default_unidad_negocio: '-1' }), catalog })
   assert.equal(result.complete, false)
-  assert.deepEqual(result.missing.sort(), ['patente', 'unidad_negocio', 'user'])
+  assert.deepEqual([...result.missing].sort(), ['patente', 'unidad_negocio', 'user'])
   assert.ok(result.errors.length >= 2)
 })
 
@@ -93,7 +99,7 @@ const analysis = { upload_token: 'opaque', proposal: {
   peso_bruto_destino: 49.69, tara_destino: '17.080', neto_destino: 32.61,
   patente_observada: 'ZZ999ZZ', chofer_observado: 'Otra Persona', confidence: 0.91, warnings: ['borroso'],
 } }
-const settings = { ...readTripImageSettings({ storage: storage({ user: '{"id":7}', default_patente: ' ab 123 cd ', default_unidad_negocio: '4' }), catalog }) }
+const settings = readTripImageSettings({ storage: storage({ user: '{"id":7}', default_patente: ' ab 123 cd ', default_unidad_negocio: '4' }), catalog })
 
 test('createReviewModel keeps editable OCR data, current config and mismatch warnings separate', () => {
   const review = createReviewModel(analysis, settings, '2026-07-13')
@@ -103,6 +109,8 @@ test('createReviewModel keeps editable OCR data, current config and mismatch war
   assert.deepEqual([review.peso_bruto_destino, review.tara_destino, review.neto_destino], ['49.690', '17.080', '32.610'])
   assert.equal(review.observaciones, '')
   assert.equal(review.config.patente, 'AB 123 CD')
+  assert.ok(Object.isFrozen(review.config))
+  assert.ok(Object.isFrozen(review.config.user) && Object.isFrozen(review.config.unidadNegocio))
   assert.equal(review.observed.patente, 'ZZ999ZZ')
   assert.ok(review.warnings.some((warning) => /patente/i.test(warning)))
   assert.ok(review.warnings.some((warning) => /chofer/i.test(warning)))
@@ -143,7 +151,26 @@ test('buildConfirmPayload validates dates, remito, provider, config, positive we
     mutate(invalid)
     assert.throws(() => buildConfirmPayload(invalid, settings))
   }
-  assert.throws(() => buildConfirmPayload(valid, { ...settings, complete: false }), /configuración/i)
+  assert.doesNotThrow(() => buildConfirmPayload(valid, { ...settings, complete: false }))
+  for (const fake of [
+    { ...settings, user: null, complete: true },
+    { ...settings, equipo: null, complete: true },
+    { ...settings, unidadNegocio: null, complete: true },
+    { ...settings, patente: 'FAKE', complete: true },
+    { ...settings, unidadNegocioId: 999, complete: true },
+    { ...settings, activeProviderIds: [], complete: true },
+    { ...settings, user: { ...settings.user, activo: false }, complete: true },
+  ]) assert.throws(() => buildConfirmPayload(valid, fake), /configuración|proveedor/i)
+})
+
+test('buildConfirmPayload trims token and rejects blank or unauthorized provider', () => {
+  const valid = createReviewModel({ ...analysis, upload_token: '  opaque  ' }, settings, '2026-07-13')
+  assert.equal(buildConfirmPayload(valid, settings).upload_token, 'opaque')
+  valid.upload_token = '   '
+  assert.throws(() => buildConfirmPayload(valid, settings), /imagen/i)
+  valid.upload_token = 'opaque'
+  valid.proveedor_id = 9
+  assert.throws(() => buildConfirmPayload(valid, settings), /proveedor/i)
 })
 
 test('transitionReviewState allows only defined workflow transitions', () => {

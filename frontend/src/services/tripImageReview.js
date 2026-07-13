@@ -6,6 +6,7 @@ const positiveInteger = (value) => {
 const normalizedText = (value) => String(value ?? '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
 const active = (item) => item && item.activo !== false && item.active !== false
 const list = (value) => Array.isArray(value) ? value : []
+const frozenCopy = (value) => value ? Object.freeze({ ...value }) : null
 
 export const readTripImageSettings = ({ storage, catalog = {} }) => {
   const errors = []
@@ -20,14 +21,30 @@ export const readTripImageSettings = ({ storage, catalog = {} }) => {
   const unidadNegocioId = positiveInteger(storage?.getItem('default_unidad_negocio'))
   if (!unidadNegocioId && storage?.getItem('default_unidad_negocio')) errors.push('La unidad de negocio guardada no es válida.')
 
-  const user = list(catalog.empleados).find((item) => active(item) && positiveInteger(item.id) === userId) || null
-  const equipo = list(catalog.equipos).find((item) => active(item) && normalizedText(item.patente) === normalizedText(patente)) || null
-  const unidadNegocio = list(catalog.unidadesNegocio).find((item) => active(item) && positiveInteger(item.id) === unidadNegocioId) || null
+  const user = frozenCopy(list(catalog.empleados).find((item) => active(item) && positiveInteger(item.id) === userId))
+  const equipo = frozenCopy(list(catalog.equipos).find((item) => active(item) && normalizedText(item.patente) === normalizedText(patente)))
+  const unidadNegocio = frozenCopy(list(catalog.unidadesNegocio).find((item) => active(item) && positiveInteger(item.id) === unidadNegocioId))
+  const activeProviderIds = Object.freeze(list(catalog.proveedores)
+    .filter(active)
+    .map((item) => positiveInteger(item.id))
+    .filter(Boolean))
   const missing = []
   if (!user) missing.push('user')
   if (!patente || !equipo) missing.push('patente')
   if (!unidadNegocio) missing.push('unidad_negocio')
-  return { user, patente, equipo, unidadNegocioId, unidadNegocio, missing, errors, complete: missing.length === 0 }
+  return Object.freeze({
+    userId: user ? positiveInteger(user.id) : null,
+    user,
+    patente,
+    equipoId: equipo ? positiveInteger(equipo.id) : null,
+    equipo,
+    unidadNegocioId: unidadNegocio ? positiveInteger(unidadNegocio.id) : null,
+    unidadNegocio,
+    activeProviderIds,
+    missing: Object.freeze(missing),
+    errors: Object.freeze(errors),
+    complete: missing.length === 0,
+  })
 }
 
 const WEIGHT_PATTERN = /^\d+(?:[.,]\d{1,3})?$/
@@ -56,6 +73,12 @@ export const createReviewModel = (analysis, settings, today) => {
   if (observedDriver && normalizedText(observedDriver) !== normalizedText(configuredDriver)) {
     warnings.push('El chofer observado no coincide con el usuario actual.')
   }
+  const config = Object.freeze({
+    user: frozenCopy(settings?.user),
+    patente: settings?.patente || '',
+    equipo: frozenCopy(settings?.equipo),
+    unidadNegocio: frozenCopy(settings?.unidadNegocio),
+  })
   return {
     upload_token: analysis?.upload_token,
     fecha_remision: proposal.fecha_remision || '',
@@ -67,7 +90,7 @@ export const createReviewModel = (analysis, settings, today) => {
     tara_destino: formatWeight(proposal.tara_destino),
     neto_destino: formatWeight(proposal.neto_destino),
     observaciones: '',
-    config: { user: settings?.user || null, patente: settings?.patente || '', unidadNegocio: settings?.unidadNegocio || null },
+    config,
     observed: { patente: observedPlate, chofer: observedDriver },
     confidence: proposal.confidence ?? null,
     warnings,
@@ -90,7 +113,20 @@ const requireDate = (value) => {
 }
 
 export const buildConfirmPayload = (review, settings) => {
-  if (!settings?.complete || !settings.patente || !positiveInteger(settings.unidadNegocioId)) {
+  const userId = positiveInteger(settings?.userId)
+  const equipoId = positiveInteger(settings?.equipoId)
+  const unidadId = positiveInteger(settings?.unidadNegocioId)
+  const validConfig = userId
+    && equipoId
+    && unidadId
+    && active(settings?.user)
+    && positiveInteger(settings.user.id) === userId
+    && active(settings?.equipo)
+    && positiveInteger(settings.equipo.id) === equipoId
+    && normalizedText(settings.equipo.patente) === normalizedText(settings.patente)
+    && active(settings?.unidadNegocio)
+    && positiveInteger(settings.unidadNegocio.id) === unidadId
+  if (!validConfig) {
     throw new TypeError('La configuración del viaje está incompleta.')
   }
   const bruto = parseWeight(review?.peso_bruto_destino)
@@ -100,10 +136,13 @@ export const buildConfirmPayload = (review, settings) => {
   if (Math.abs(bruto - tara - neto) > 0.01 + Number.EPSILON) throw new TypeError('Los pesos no cierran dentro de la tolerancia permitida.')
   if (!REMITO.test(String(review?.numero_remision_fpv))) throw new TypeError('El remito debe tener formato 000-000-0000000.')
   const proveedorId = positiveInteger(review?.proveedor_id)
-  if (!proveedorId) throw new TypeError('Seleccioná un proveedor válido.')
-  if (typeof review?.upload_token !== 'string' || !review.upload_token) throw new TypeError('La imagen analizada ya no está disponible.')
+  if (!proveedorId || !Array.isArray(settings?.activeProviderIds) || !settings.activeProviderIds.includes(proveedorId)) {
+    throw new TypeError('Seleccioná un proveedor activo válido.')
+  }
+  const uploadToken = typeof review?.upload_token === 'string' ? review.upload_token.trim() : ''
+  if (!uploadToken) throw new TypeError('La imagen analizada ya no está disponible.')
   return {
-    upload_token: review.upload_token,
+    upload_token: uploadToken,
     fecha_remision: requireDate(review.fecha_remision),
     fecha_recepcion: requireDate(review.fecha_recepcion),
     numero_remision_fpv: review.numero_remision_fpv,
