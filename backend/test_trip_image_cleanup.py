@@ -10,7 +10,7 @@ from sqlalchemy.orm import sessionmaker
 
 import models
 from image_storage import ImageStorage
-from image_storage import ImageStoragePathError
+from image_storage import ImageStoragePathError, ImageValidationError
 from trip_image_cleanup import cleanup_trip_images
 
 
@@ -80,6 +80,18 @@ class TripImageCleanupTests(unittest.TestCase):
         self.assertIsNotNone(db.get(models.ViajeImagen, first.id))
         self.assertTrue((self.root / first_file.relative_path).exists())
         self.assertTrue((self.root / second_file.relative_path).exists())
+
+    def test_prematurely_expired_row_is_retained_when_signed_times_do_not_match(self):
+        db = self.Session()
+        row, confirmed = self.add_evidence(
+            db, confirmed_at=NOW - timedelta(hours=1), expires_at=NOW + timedelta(days=59)
+        )
+        row.expires_at = (NOW - timedelta(seconds=1)).replace(tzinfo=None)
+        db.commit()
+        result = cleanup_trip_images(db, self.storage, NOW)
+        self.assertIn("expired_metadata_mismatch", result.errors)
+        self.assertIsNotNone(db.get(models.ViajeImagen, row.id))
+        self.assertTrue((self.root / confirmed.relative_path).exists())
 
     def test_old_orphan_deleted_recent_and_db_backed_retained(self):
         db = self.Session()
@@ -168,6 +180,27 @@ class TripImageCleanupTests(unittest.TestCase):
         result = cleanup_trip_images(db, self.storage, NOW)
         self.assertEqual(result.orphan_deleted, 1)
         self.assertFalse((self.root / promoted.relative_path).exists())
+
+    def test_cleanup_wins_then_queued_confirmation_rolls_back_on_missing_promotion(self):
+        db = self.Session()
+        saved = self.storage.save_temp(JPEG, "queued.jpg", "image/jpeg")
+        confirmed = self.storage.promote(saved.token, NOW - timedelta(days=2))
+        token_hash = __import__("hashlib").sha256(saved.token.encode("ascii")).hexdigest()
+        result = cleanup_trip_images(db, self.storage, NOW)
+        self.assertEqual(result.orphan_deleted, 1)
+
+        queued = models.ViajeImagen(
+            viaje_id=999, storage_path=confirmed.relative_path, original_name="queued.jpg",
+            mime_type="image/jpeg", sha256=confirmed.sha256, token_hash=token_hash,
+            created_at=confirmed.confirmed_at.replace(tzinfo=None),
+            expires_at=confirmed.expires_at.replace(tzinfo=None),
+        )
+        db.add(queued)
+        db.flush()
+        with self.assertRaises(ImageValidationError):
+            self.storage.promote(saved.token, NOW)
+        db.rollback()
+        self.assertEqual(db.query(models.ViajeImagen).filter(models.ViajeImagen.token_hash == token_hash).count(), 0)
 
 
 class SchedulerCleanupTests(unittest.TestCase):

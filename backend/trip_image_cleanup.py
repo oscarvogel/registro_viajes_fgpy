@@ -16,6 +16,19 @@ class TripImageCleanupResult:
     errors: tuple[str, ...] = ()
 
 
+def _matches_stored_naive_utc(stored: datetime, signed: datetime, *, seconds_precision: bool) -> bool:
+    """Compare aware UTC receipt time at the precision retained by the DB."""
+    if not isinstance(stored, datetime) or stored.tzinfo is not None:
+        return False
+    if signed.tzinfo is None or signed.utcoffset() != timedelta(0):
+        return False
+    expected = signed.replace(tzinfo=None)
+    if seconds_precision:
+        stored = stored.replace(microsecond=0)
+        expected = expected.replace(microsecond=0)
+    return stored == expected
+
+
 def cleanup_trip_images(db, storage, now: datetime, orphan_grace: timedelta = timedelta(hours=24)) -> TripImageCleanupResult:
     """Clean evidence under filesystem and database locks.
 
@@ -60,6 +73,10 @@ def _cleanup_locked(db, storage, now: datetime, orphan_grace: timedelta) -> Trip
         errors.append("promotion_scan")
         scan = None
         promotions_by_token = {}
+    try:
+        evidence_seconds_precision = db.get_bind().dialect.name == "mysql"
+    except Exception:
+        evidence_seconds_precision = False
     expired_tokens_deleted = set()
     for evidence_id in candidate_ids:
         try:
@@ -82,6 +99,12 @@ def _cleanup_locked(db, storage, now: datetime, orphan_grace: timedelta) -> Trip
             or evidence_storage_path != promotion.relative_path
             or evidence.sha256 != promotion.sha256
             or evidence.mime_type != promotion.detected_mime
+            or not _matches_stored_naive_utc(
+                evidence.created_at, promotion.confirmed_at, seconds_precision=evidence_seconds_precision
+            )
+            or not _matches_stored_naive_utc(
+                evidence.expires_at, promotion.expires_at, seconds_precision=evidence_seconds_precision
+            )
         ):
             db.rollback()
             errors.append("expired_metadata_mismatch")
