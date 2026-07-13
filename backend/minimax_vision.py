@@ -178,7 +178,7 @@ class MiniMaxVisionClient:
                 timeout_seconds=timeout, max_output_bytes=maximum,
             )
         except MiniMaxVisionError:
-            raise
+            failure = "No se pudo ejecutar MiniMax Vision"
         except TimeoutError:
             failure = "MiniMax Vision excedio el tiempo limite"
         except OverflowError:

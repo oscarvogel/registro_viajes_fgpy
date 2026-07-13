@@ -143,6 +143,16 @@ class MiniMaxVisionClientTests(unittest.TestCase):
                 self.assertNotIn("top-secret", str(caught.exception))
                 self.assertNotIn("top-secret", repr(caught.exception.__cause__))
 
+    def test_executor_domain_error_is_recreated_without_foreign_secret(self):
+        foreign = MiniMaxVisionError("MINIMAX_API_KEY=top-secret raw response")
+        with self.assertRaises(MiniMaxVisionError) as caught:
+            self.client(FakeExecutor(error=foreign)).analyze(self.image)
+        error = caught.exception
+        exposed = (str(error), repr(error), repr(error.args), repr(error.__cause__), repr(error.__context__))
+        self.assertTrue(all("top-secret" not in value for value in exposed))
+        self.assertIsNot(error, foreign)
+        self.assertEqual(str(error), "No se pudo ejecutar MiniMax Vision")
+
     def test_schema_requires_all_fields_and_types(self):
         invalid_values = []
         for key in VALID:
