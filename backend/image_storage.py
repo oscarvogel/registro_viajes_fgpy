@@ -40,6 +40,10 @@ class ImageTokenError(ImageStorageError):
     """An image token is invalid or expired."""
 
 
+class ImageTokenExpiredError(ImageTokenError):
+    """An otherwise valid image token has expired."""
+
+
 class ImageStoragePathError(ImageStorageError):
     """A path is unsafe or cannot be used."""
 
@@ -61,6 +65,15 @@ class TempImageRef:
     path: Path
     detected_mime: str
     sha256: str
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
+class TokenDescription:
+    relative_path: str
+    detected_mime: str
+    sha256: str
+    original_name: str
     expires_at: datetime
 
 
@@ -322,7 +335,7 @@ class ImageStorage:
                 raise ImageTokenError("Unsupported image token version")
             expires_at = datetime.fromtimestamp(payload["exp"], timezone.utc)
             if self._current_time() >= expires_at:
-                raise ImageTokenError("Image token has expired")
+                raise ImageTokenExpiredError("Image token has expired")
             if not isinstance(payload.get("id"), str) or not re.fullmatch(r"[0-9a-f]{32}", payload["id"]):
                 raise ImageTokenError("Invalid image token")
             self._safe_path(payload["path"], required_prefix="tmp")
@@ -454,6 +467,13 @@ class ImageStorage:
         if mime != payload["mime"] or size != payload["size"]:
             raise ImageValidationError("Temporary image validation failed")
         return TempImageRef(payload["path"], path, payload["mime"], digest, datetime.fromtimestamp(payload["exp"], timezone.utc))
+
+    def describe_token(self, token: str) -> TokenDescription:
+        payload = self._verify_token(token)
+        return TokenDescription(
+            payload["path"], payload["mime"], payload["sha256"], payload["name"],
+            datetime.fromtimestamp(payload["exp"], timezone.utc),
+        )
 
     def _receipt_path(self, upload_id: str) -> Path:
         return self._safe_path(f"receipts/{upload_id}.json", required_prefix="receipts")
@@ -623,6 +643,55 @@ class ImageStorage:
                 raise ImageStoragePathError("Image promotion could not be completed") from exc
             self._best_effort_remove_temp(source_ref.path)
             return confirmed
+
+    def revert_promotion(self, token: str, confirmed: ConfirmedImage) -> None:
+        payload = self._verify_token(token)
+        expected_relative = f"confirmed/{confirmed.confirmed_at:%Y/%m}/{payload['id']}{_MIME_EXTENSIONS[payload['mime']]}"
+        if (
+            not isinstance(confirmed, ConfirmedImage)
+            or confirmed.relative_path != expected_relative
+            or not hmac.compare_digest(confirmed.sha256, payload["sha256"])
+            or confirmed.detected_mime != payload["mime"]
+        ):
+            raise ImageValidationError("Confirmation does not match image token")
+        receipt_path = self._receipt_path(payload["id"])
+        with self._promotion_lock(payload["id"]):
+            source = self._safe_path(payload["path"], required_prefix="tmp")
+            destination = self._safe_path(expected_relative, required_prefix="confirmed")
+            if not receipt_path.is_file():
+                if destination.exists():
+                    raise ImageValidationError("Promotion receipt is unavailable")
+                self.resolve_temp(token)
+                return
+            loaded = self._load_receipt(receipt_path, token, payload)
+            if loaded != confirmed:
+                raise ImageValidationError("Confirmation does not match promotion receipt")
+            data = self._read_bounded_file(destination, "confirmed")
+            if source.exists():
+                digest, mime, size = self._inspect_file(source, "tmp")
+                if digest != payload["sha256"] or mime != payload["mime"] or size != payload["size"]:
+                    raise ImageValidationError("Existing temporary image is invalid")
+            else:
+                self._write_exclusive(source, data)
+            metadata_path = source.with_suffix(source.suffix + ".json")
+            metadata = {
+                "kind": "temp-metadata", "id": payload["id"], "path": payload["path"],
+                "expires_at": datetime.fromtimestamp(payload["exp"], timezone.utc).isoformat(),
+                "sha256": payload["sha256"], "mime": payload["mime"],
+            }
+            if not metadata_path.exists():
+                self._write_exclusive(metadata_path, self._sign_payload(metadata).encode("ascii"))
+            else:
+                try:
+                    existing = self._decode_signed(metadata_path.read_text(encoding="ascii"))
+                except (ImageStorageError, OSError, UnicodeError) as exc:
+                    raise ImageValidationError("Existing temporary metadata is invalid") from exc
+                if existing != metadata:
+                    raise ImageValidationError("Existing temporary metadata is invalid")
+            receipt_path.unlink()
+            destination.unlink()
+            self._sync_directory(receipt_path.parent)
+            self._sync_directory(destination.parent)
 
     def resolve_confirmed(self, relative_path: str) -> Path:
         path = self._safe_path(relative_path, required_prefix="confirmed")

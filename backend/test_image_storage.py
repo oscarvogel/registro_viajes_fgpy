@@ -15,6 +15,7 @@ from backend.image_storage import (
     ImageStorage,
     ImageStorageConfigError,
     ImageStoragePathError,
+    ImageTokenExpiredError,
     ImageTokenError,
     ImageValidationError,
 )
@@ -41,6 +42,48 @@ class ImageStorageTestCase(unittest.TestCase):
 
     def tearDown(self):
         self.temp_dir.cleanup()
+
+    def test_describe_token_returns_verified_safe_metadata(self):
+        saved = self.storage.save_temp(JPEG, "../ticket.jpg", "image/jpeg")
+        described = self.storage.describe_token(saved.token)
+        self.assertEqual(described.original_name, "ticket.jpg")
+        self.assertEqual(described.sha256, saved.sha256)
+        self.assertEqual(described.relative_path, saved.relative_path)
+
+    def test_expired_token_has_explicit_exception_type(self):
+        saved = self.storage.save_temp(JPEG, "ticket.jpg", "image/jpeg")
+        expired = ImageStorage(self.root, SECRET, max_bytes=1024, now=lambda: NOW + timedelta(days=2))
+        with self.assertRaises(ImageTokenExpiredError):
+            expired.describe_token(saved.token)
+
+    def test_revert_promotion_restores_temp_and_allows_promotion_again(self):
+        saved = self.storage.save_temp(JPEG, "ticket.jpg", "image/jpeg")
+        confirmed = self.storage.promote(saved.token, NOW)
+        self.storage.revert_promotion(saved.token, confirmed)
+        self.assertEqual(self.storage.resolve_temp(saved.token).path.read_bytes(), JPEG)
+        self.assertFalse((self.root / confirmed.relative_path).exists())
+        promoted_again = self.storage.promote(saved.token, NOW)
+        self.assertEqual(promoted_again.relative_path, confirmed.relative_path)
+
+    def test_revert_is_idempotent_and_rejects_wrong_confirmation(self):
+        saved = self.storage.save_temp(JPEG, "ticket.jpg", "image/jpeg")
+        confirmed = self.storage.promote(saved.token, NOW)
+        self.storage.revert_promotion(saved.token, confirmed)
+        self.storage.revert_promotion(saved.token, confirmed)
+        wrong = SimpleNamespace(**{**confirmed.__dict__, "sha256": "0" * 64})
+        with self.assertRaises(ImageValidationError):
+            self.storage.revert_promotion(saved.token, wrong)
+
+    def test_revert_does_not_overwrite_invalid_existing_temp(self):
+        saved = self.storage.save_temp(JPEG, "ticket.jpg", "image/jpeg")
+        confirmed = self.storage.promote(saved.token, NOW)
+        temp_path = self.root / saved.relative_path
+        temp_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path.write_bytes(PNG)
+        with self.assertRaises(ImageValidationError):
+            self.storage.revert_promotion(saved.token, confirmed)
+        self.assertEqual(temp_path.read_bytes(), PNG)
+        self.assertTrue((self.root / confirmed.relative_path).exists())
 
     def test_recognizes_supported_types_by_magic_bytes_and_ignores_extension(self):
         cases = ((JPEG, "image/jpeg", ".jpg"), (PNG, "image/png", ".png"), (WEBP, "image/webp", ".webp"))
