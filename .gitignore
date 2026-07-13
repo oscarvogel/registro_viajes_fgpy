@@ -34,3 +34,6 @@ tmp/
 temp/
 recovery/
 *.before-*
+
+# Worktrees locales de desarrollo
+.worktrees/
