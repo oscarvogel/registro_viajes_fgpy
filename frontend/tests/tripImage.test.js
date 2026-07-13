@@ -146,7 +146,7 @@ const analysis = { upload_token: 'opaque', proposal: {
 } }
 const settings = readTripImageSettings({ storage: storage({ user: '{"id":7}', default_patente: ' ab 123 cd ', default_unidad_negocio: '4' }), catalog })
 
-test('createReviewModel keeps editable OCR data, current config and mismatch warnings separate', () => {
+test('createReviewModel exposes only concrete configuration mismatches', () => {
   const review = createReviewModel(analysis, settings, '2026-07-13')
   assert.equal(review.upload_token, 'opaque')
   assert.equal(review.fecha_recepcion, '2026-07-13')
@@ -162,14 +162,31 @@ test('createReviewModel keeps editable OCR data, current config and mismatch war
   assert.throws(() => { review.config.user.nombre = 'Mutado' }, TypeError)
   assert.equal(catalog.empleados[0].nombre, ' Ana ')
   assert.equal(review.observed.patente, 'ZZ999ZZ')
-  assert.ok(review.warnings.some((warning) => /patente/i.test(warning)))
-  assert.ok(review.warnings.some((warning) => /chofer/i.test(warning)))
+  assert.deepEqual(review.warnings, ['borroso'])
+  assert.deepEqual(review.configurationWarnings, [
+    'La foto parece indicar ZZ999ZZ; en Ajustes figura AB 123 CD.',
+    'La foto parece indicar Otra Persona; el usuario actual es Pérez Ana.',
+  ])
 })
 
 test('createReviewModel accepts observed full driver in either name order', () => {
   for (const chofer_observado of ['Ana Pérez', 'Pérez Ana']) {
     const review = createReviewModel({ ...analysis, proposal: { ...analysis.proposal, chofer_observado } }, settings, '2026-07-13')
-    assert.equal(review.warnings.some((warning) => /chofer observado/i.test(warning)), false)
+    assert.equal(review.configurationWarnings?.some((warning) => /usuario actual/i.test(warning)), false)
+  }
+})
+
+test('createReviewModel omits configuration warnings when OCR matches or is absent', () => {
+  for (const observed of ['Ana Pérez', 'Pérez Ana', null]) {
+    const review = createReviewModel({
+      ...analysis,
+      proposal: {
+        ...analysis.proposal,
+        patente_observada: observed ? 'AB123CD' : null,
+        chofer_observado: observed,
+      },
+    }, settings, '2026-07-13')
+    assert.deepEqual(review.configurationWarnings, [])
   }
 })
 

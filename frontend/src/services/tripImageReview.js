@@ -100,16 +100,22 @@ const observedValue = (proposal, ...names) => names.map((name) => proposal[name]
 export const createReviewModel = (analysis, settings, today) => {
   const proposal = analysis?.proposal || {}
   const warnings = [...list(proposal.warnings)]
+  const configurationWarnings = []
   const observedPlate = observedValue(proposal, 'patente_observada', 'observed_plate', 'patente')
   const observedDriver = observedValue(proposal, 'chofer_observado', 'observed_driver', 'chofer')
   if (observedPlate && normalizedText(observedPlate) !== normalizedText(settings?.patente)) {
-    warnings.push('La patente observada no coincide con la configuración actual.')
+    configurationWarnings.push(
+      `La foto parece indicar ${observedPlate}; en Ajustes figura ${settings?.patente || 'sin configurar'}.`,
+    )
   }
   const userName = settings?.user?.nombre || ''
   const userSurname = settings?.user?.apellido || ''
+  const configuredDriver = `${userSurname} ${userName}`.trim()
   const configuredDrivers = [normalizedText(`${userName} ${userSurname}`), normalizedText(`${userSurname} ${userName}`)]
   if (observedDriver && !configuredDrivers.includes(normalizedText(observedDriver))) {
-    warnings.push('El chofer observado no coincide con el usuario actual.')
+    configurationWarnings.push(
+      `La foto parece indicar ${observedDriver}; el usuario actual es ${configuredDriver || 'desconocido'}.`,
+    )
   }
   const config = Object.freeze({
     user: userSnapshot(settings?.user),
@@ -132,6 +138,7 @@ export const createReviewModel = (analysis, settings, today) => {
     observed: { patente: observedPlate, chofer: observedDriver },
     confidence: proposal.confidence ?? null,
     warnings,
+    configurationWarnings,
   }
 }
 
