@@ -48,24 +48,24 @@ payload = {
     }
 }
 
-print("🧪 Enviando logs de prueba al backend...")
+print("[TEST] Enviando logs de prueba al backend...")
 print(f"URL: {API_URL}")
 print(f"Payload: {json.dumps(payload, indent=2)}\n")
 
 try:
     response = requests.post(API_URL, json=payload)
     
-    print(f"✅ Status Code: {response.status_code}")
-    print(f"📦 Response: {response.json()}")
+    print(f"[OK] Status Code: {response.status_code}")
+    print(f"[RESPUESTA] {response.json()}")
     
     if response.status_code == 200:
-        print("\n✨ ¡Logs enviados correctamente!")
+        print("\n[OK] ¡Logs enviados correctamente!")
         print("Revisa la consola del backend (terminal uvicorn) para ver los logs impresos.")
     else:
-        print(f"\n❌ Error: {response.status_code}")
+        print(f"\n[ERROR] {response.status_code}")
         
 except requests.exceptions.ConnectionError:
-    print("❌ Error: No se pudo conectar al backend.")
+    print("[ERROR] No se pudo conectar al backend.")
     print("Asegúrate de que el backend esté corriendo en http://localhost:8000")
 except Exception as e:
-    print(f"❌ Error inesperado: {e}")
+    print(f"[ERROR] Error inesperado: {e}")
