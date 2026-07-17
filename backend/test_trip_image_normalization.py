@@ -5,8 +5,8 @@ from decimal import Decimal
 
 from backend.trip_image_normalization import (
     ExtractionValidationError,
+    normalize_business_name,
     normalize_extraction,
-    normalize_provider_name,
 )
 
 
@@ -21,20 +21,28 @@ class NormalizeExtractionTests(unittest.TestCase):
             "tara": "17.080",
             "neto": "32.610",
             "unidad_peso": "kg",
-            "proveedor_candidato": "ALCOGREEN S.A.",
+            "cliente_candidato": "ALCOGREEN S.A.",
+            "proveedor_candidato": "FORESTAL PARAGUAY S.A.",
         }
         data.update(overrides)
         return data
 
-    def test_normalizes_main_ocr_sample(self):
-        result = normalize_extraction(self.valid_data())
+    def test_normalizes_reference_document(self):
+        result = normalize_extraction(self.valid_data(
+            fecha_remision="17/07/2026",
+            remito_numero="3755",
+            peso_bruto="48.250",
+            tara="16.460",
+            neto="31.790",
+        ))
 
-        self.assertEqual(result.fecha_remision.isoformat(), "2026-07-13")
-        self.assertEqual(result.numero_remision_fpv, "002-003-0003677")
-        self.assertEqual(result.peso_bruto_destino, Decimal("49.690"))
-        self.assertEqual(result.tara_destino, Decimal("17.080"))
-        self.assertEqual(result.neto_destino, Decimal("32.610"))
-        self.assertEqual(result.proveedor_normalizado, "alcogreen")
+        self.assertEqual(result.fecha_remision.isoformat(), "2026-07-17")
+        self.assertEqual(result.numero_remision_fpv, "002-003-0003755")
+        self.assertEqual(result.peso_bruto_destino, Decimal("48.250"))
+        self.assertEqual(result.tara_destino, Decimal("16.460"))
+        self.assertEqual(result.neto_destino, Decimal("31.790"))
+        self.assertEqual(result.cliente_normalizado, "alcogreen")
+        self.assertEqual(result.proveedor_normalizado, "forestal paraguay")
 
     def test_accepts_iso_date(self):
         result = normalize_extraction(self.valid_data(fecha_remision="2026-07-13"))
@@ -219,16 +227,22 @@ class NormalizeExtractionTests(unittest.TestCase):
             )
 
 
-class ProviderNameNormalizationTests(unittest.TestCase):
-    def test_removes_accents_punctuation_spacing_and_corporate_suffixes(self):
-        variants = ("Alcogreen S.A.", "  ÁLCOGREEN,   S A  ", "Alcogreen S.A.S.")
-        for value in variants:
+class BusinessNameNormalizationTests(unittest.TestCase):
+    def test_normalizes_business_name_for_clients_and_providers(self):
+        expected = {
+            "Alcogreen S.A.": "alcogreen",
+            "  ÁLCOGREEN,   S A  ": "alcogreen",
+            "Alcogreen S.A.S.": "alcogreen",
+            "Forestal Paraguay S.A.": "forestal paraguay",
+            "FORESTAL PARAGUAY SAIC": "forestal paraguay",
+        }
+        for value, normalized in expected.items():
             with self.subTest(value=value):
-                self.assertEqual(normalize_provider_name(value), "alcogreen")
+                self.assertEqual(normalize_business_name(value), normalized)
 
     def test_preserves_meaningful_name_words(self):
         self.assertEqual(
-            normalize_provider_name("Forestal del Paraná S.R.L."),
+            normalize_business_name("Forestal del Paraná S.R.L."),
             "forestal del parana",
         )
 

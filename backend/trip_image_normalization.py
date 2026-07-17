@@ -24,11 +24,12 @@ class NormalizedExtraction:
     peso_bruto_destino: Decimal
     tara_destino: Decimal
     neto_destino: Decimal
+    cliente_normalizado: str
     proveedor_normalizado: str
 
 
-def normalize_provider_name(value: Any) -> str:
-    """Return a comparison key without performing provider lookup."""
+def normalize_business_name(value: Any) -> str:
+    """Return a comparison key for an OCR business name."""
     if value is None:
         return ""
     text = unicodedata.normalize("NFKD", str(value).lower())
@@ -160,5 +161,6 @@ def normalize_extraction(data: Mapping[str, Any]) -> NormalizedExtraction:
         peso_bruto_destino=bruto_destino,
         tara_destino=tara_destino,
         neto_destino=neto_destino,
-        proveedor_normalizado=normalize_provider_name(data.get("proveedor_candidato")),
+        cliente_normalizado=normalize_business_name(data.get("cliente_candidato")),
+        proveedor_normalizado=normalize_business_name(data.get("proveedor_candidato")),
     )

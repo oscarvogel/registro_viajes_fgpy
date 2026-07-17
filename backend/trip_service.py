@@ -64,6 +64,15 @@ def _equipment(db, raw_patente):
     return equipo
 
 
+def _active_catalog_id(db, model, value, label):
+    if value is None:
+        raise HTTPException(status_code=400, detail=f"{label} requerido")
+    entity = db.query(model).filter(model.id == value).first()
+    if not entity or not entity.activo:
+        raise HTTPException(status_code=400, detail=f"{label} no encontrado")
+    return entity.id
+
+
 def _catalogs(db, registro):
     unidad = db.query(models.UnidadNegocio).filter(
         models.UnidadNegocio.id == registro.unidad_negocio_id
@@ -73,22 +82,23 @@ def _catalogs(db, registro):
 
     proveedor_id = None
     if registro.proveedor_id is not None:
-        proveedor = db.query(models.Proveedor).filter(models.Proveedor.id == registro.proveedor_id).first()
-        if not proveedor or not proveedor.activo:
-            raise HTTPException(status_code=400, detail="Proveedor no encontrado")
-        proveedor_id = proveedor.id
+        proveedor_id = _active_catalog_id(
+            db, models.Proveedor, registro.proveedor_id, "Proveedor"
+        )
 
     if registro.pesaje_unico:
         if proveedor_id is None:
-            raise HTTPException(status_code=400, detail="Proveedor requerido para pesaje único")
-        if registro.cliente_id is not None:
-            raise HTTPException(status_code=400, detail="Cliente no permitido para pesaje único")
-        cliente_id = None
+            raise HTTPException(status_code=400, detail="Proveedor requerido")
+        cliente_id = _active_catalog_id(
+            db, models.Cliente, registro.cliente_id, "Cliente"
+        )
     else:
-        cliente_id = registro.cliente_id if registro.cliente_id is not None else 1
-        cliente = db.query(models.Cliente).filter(models.Cliente.id == cliente_id).first()
-        if not cliente or not cliente.activo:
-            raise HTTPException(status_code=400, detail="Cliente no encontrado")
+        cliente_id = _active_catalog_id(
+            db,
+            models.Cliente,
+            registro.cliente_id if registro.cliente_id is not None else 1,
+            "Cliente",
+        )
     return proveedor_id, cliente_id
 
 

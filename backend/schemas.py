@@ -159,6 +159,8 @@ class RegistroViajeResponse(BaseModel):
 class TripImageProposal(BaseModel):
     fecha_remision: date
     numero_remision_fpv: str = Field(pattern=r"^[0-9]{3}-[0-9]{3}-[0-9]{7}$")
+    cliente_id: Optional[int] = None
+    cliente_candidato: Optional[str] = None
     proveedor_id: Optional[int] = None
     proveedor_candidato: Optional[str] = None
     peso_bruto_destino: Decimal
@@ -195,6 +197,7 @@ class TripImageConfirmRequest(BaseModel):
     fecha_remision: date
     fecha_recepcion: date
     numero_remision_fpv: str = Field(pattern=r"^[0-9]{3}-[0-9]{3}-[0-9]{7}$")
+    cliente_id: int
     proveedor_id: int
     patente: str
     unidad_negocio_id: int

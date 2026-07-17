@@ -25,14 +25,22 @@ VALID = {
     "remito_tipo": "001",
     "remito_sucursal": "002",
     "remito_numero": "0000123",
-    "proveedor_candidato": "Proveedor SA",
+    "cliente_candidato": "Alcogreen S.A.",
+    "proveedor_candidato": "Forestal Paraguay S.A.",
     "peso_bruto": 12000,
     "tara": 4000,
     "neto": 8000,
     "unidad_peso": "kg",
     "patente_observada": "ABC123",
     "chofer_observado": "Ana Perez",
-    "confidence": {"fecha_remision": 0.9, "fecha_remito": 0.9, "fecha_ticket": 0.8, "remito_numero": 0.8},
+    "confidence": {
+        "fecha_remision": 0.9,
+        "fecha_remito": 0.9,
+        "fecha_ticket": 0.8,
+        "cliente_candidato": 0.9,
+        "proveedor_candidato": 0.9,
+        "remito_numero": 0.8,
+    },
     "warnings": [],
 }
 
@@ -107,11 +115,22 @@ class MiniMaxVisionClientTests(unittest.TestCase):
         self.assertIn("priorizar fecha_remito", prompt)
         self.assertIn("FECHA SALIDA", prompt)
         self.assertIn("OCR no elige", prompt)
+        self.assertIn("cliente_candidato", prompt)
+        self.assertIn("proveedor_candidato", prompt)
         self.assertIn("DESTINATARIO DE LA MERCADERIA", prompt)
+        self.assertIn("REMITENTE DE LA MERCADERIA", prompt)
+        self.assertIn("cliente_candidato toma la razon social de DESTINATARIO", prompt)
+        self.assertIn("proveedor_candidato toma la razon social de REMITENTE", prompt)
         self.assertIn('49.690,00', prompt)
         self.assertIn("nunca 49.69", prompt)
         self.assertIn("primeros 3 digitos", prompt)
         self.assertNotIn("top-secret", json.dumps(messages))
+
+    def test_response_without_client_candidate_is_rejected(self):
+        invalid = dict(VALID)
+        invalid.pop("cliente_candidato")
+        with self.assertRaises(MiniMaxVisionError):
+            self.client(FakeExecutor(tool_response(invalid))).analyze(self.image)
 
     def test_single_json_fence_is_accepted(self):
         response = {"result": {"content": [{"type": "text", "text": "```json\n" + json.dumps(VALID) + "\n```"}]}}

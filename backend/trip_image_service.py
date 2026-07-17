@@ -11,10 +11,21 @@ from sqlalchemy.orm import sessionmaker
 import models
 import schemas
 from image_storage import ImageStorage
-from trip_image_normalization import normalize_extraction, normalize_provider_name
+from trip_image_normalization import normalize_business_name, normalize_extraction
 from trip_service import create_trip
 
 from logger import app_logger
+
+
+def _resolve_unique_active(db, model, normalized_name):
+    candidates = db.query(model.id, model.razon_social).filter(
+        model.activo.is_(True)
+    ).all()
+    matches = [
+        row for row in candidates
+        if normalize_business_name(row.razon_social) == normalized_name
+    ]
+    return matches[0].id if len(matches) == 1 else None
 
 
 class TripImageService:
@@ -28,17 +39,22 @@ class TripImageService:
         temporary = self.storage.save_temp(data, original_name, mime_type)
         raw = self.vision.analyze(self.storage.resolve_temp(temporary.token).path)
         normalized = normalize_extraction(raw)
-        candidates = self.db.query(models.Proveedor.id, models.Proveedor.razon_social).filter(
-            models.Proveedor.activo.is_(True)
-        ).all()
-        matches = [row for row in candidates if normalize_provider_name(row.razon_social) == normalized.proveedor_normalizado]
+        client_id = _resolve_unique_active(
+            self.db, models.Cliente, normalized.cliente_normalizado
+        )
+        provider_id = _resolve_unique_active(
+            self.db, models.Proveedor, normalized.proveedor_normalizado
+        )
         warnings = list(raw.get("warnings", []))
-        provider_id = matches[0].id if len(matches) == 1 else None
-        if not provider_id:
+        if client_id is None:
+            warnings.append("Cliente sin coincidencia activa unica; seleccione un cliente para confirmar")
+        if provider_id is None:
             warnings.append("Proveedor sin coincidencia activa unica; seleccione un proveedor para confirmar")
         return {"upload_token": temporary.token, "proposal": {
             "fecha_remision": normalized.fecha_remision,
             "numero_remision_fpv": normalized.numero_remision_fpv,
+            "cliente_id": client_id,
+            "cliente_candidato": raw.get("cliente_candidato"),
             "proveedor_id": provider_id,
             "proveedor_candidato": raw.get("proveedor_candidato"),
             "peso_bruto_destino": normalized.peso_bruto_destino,
@@ -89,7 +105,7 @@ class TripImageService:
             registro = schemas.RegistroViajeCreate(
                 fecha_remision=request.fecha_remision, fecha_recepcion=request.fecha_recepcion,
                 proveedor_id=request.proveedor_id, numero_remision="",
-                numero_remision_fpv=request.numero_remision_fpv, cliente_id=None,
+                numero_remision_fpv=request.numero_remision_fpv, cliente_id=request.cliente_id,
                 chofer_id=current_user.id, patente=request.patente,
                 unidad_negocio_id=request.unidad_negocio_id, pesaje_unico=True,
                 peso_bruto_origen=0, tara_origen=0, neto_origen=0,

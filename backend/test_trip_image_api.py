@@ -156,9 +156,9 @@ class CreateTripServiceTest(unittest.TestCase):
             self.create_trip(self.payload(**overrides))
         self.assertEqual(ctx.exception.status_code, 400)
 
-    def test_pesaje_unico_guarda_destino_produccion_y_cliente_nulo(self):
+    def test_pesaje_unico_guarda_destino_produccion_cliente_y_proveedor(self):
         row = self.create_trip(self.payload(
-            pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+            pesaje_unico=True, cliente_id=1, peso_bruto_origen=0,
             tara_origen=0, neto_origen=0,
         ))
         self.assertEqual(row.neto_origen, Decimal("0.00"))
@@ -167,7 +167,8 @@ class CreateTripServiceTest(unittest.TestCase):
         self.assertEqual(row.neto_destino, Decimal("32.61"))
         self.assertEqual(row.produccion, Decimal("32.61"))
         self.assertTrue(row.pesaje_unico)
-        self.assertIsNone(row.cliente_id)
+        self.assertEqual(row.cliente_id, 1)
+        self.assertEqual(row.proveedor_id, 20)
 
     def test_normal_rechaza_origen_no_positivo_y_produce_desde_origen(self):
         self.assert_bad_request(neto_origen=0)
@@ -188,13 +189,13 @@ class CreateTripServiceTest(unittest.TestCase):
 
     def test_pesaje_unico_rechaza_origen_no_cero(self):
         for field in ("peso_bruto_origen", "tara_origen", "neto_origen"):
-            values = dict(pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+            values = dict(pesaje_unico=True, cliente_id=1, peso_bruto_origen=0,
                           tara_origen=0, neto_origen=0)
             values[field] = 1
             self.assert_bad_request(**values)
 
     def test_pesaje_unico_rechaza_pesos_destino_invalidos(self):
-        base = dict(pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+        base = dict(pesaje_unico=True, cliente_id=1, peso_bruto_origen=0,
                     tara_origen=0, neto_origen=0)
         for changes in (
             {"neto_destino": 0}, {"peso_bruto_destino": -1},
@@ -206,7 +207,7 @@ class CreateTripServiceTest(unittest.TestCase):
 
     def test_pesaje_unico_acepta_hasta_200_tn_y_rechaza_mas(self):
         base = dict(
-            pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+            pesaje_unico=True, cliente_id=1, peso_bruto_origen=0,
             tara_origen=0, neto_origen=0,
         )
         row = self.create_trip(self.payload(
@@ -259,7 +260,7 @@ class CreateTripServiceTest(unittest.TestCase):
     def test_servicio_rechaza_pesos_no_finitos_aunque_se_omita_schema(self):
         normal = self.payload()
         unique = self.payload(
-            pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+            pesaje_unico=True, cliente_id=1, peso_bruto_origen=0,
             tara_origen=0, neto_origen=0,
         )
         for base, fields in (
@@ -288,7 +289,7 @@ class CreateTripServiceTest(unittest.TestCase):
 
     def test_pesaje_unico_valida_crudo_y_persiste_relacion_redondeada(self):
         row = self.create_trip(self.payload(
-            pesaje_unico=True, cliente_id=None, peso_bruto_origen=0,
+            pesaje_unico=True, cliente_id=1, peso_bruto_origen=0,
             tara_origen=0, neto_origen=0, peso_bruto_destino=49.695,
             tara_destino=17.084, neto_destino=32.611,
         ))
@@ -376,25 +377,27 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         root = tempfile.TemporaryDirectory(); self.addCleanup(root.cleanup)
         storage = ImageStorage(Path(root.name).resolve(), "x" * 32, temporary_ttl=__import__('datetime').timedelta(hours=1), now=(lambda: clock[0]) if clock else None)
         engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-        for table in (models.Empleado.__table__, models.Proveedor.__table__, models.Equipo.__table__, models.UnidadNegocio.__table__, models.TableroProduccion.__table__, models.ViajeImagen.__table__):
+        for table in (models.Empleado.__table__, models.Cliente.__table__, models.Proveedor.__table__, models.Equipo.__table__, models.UnidadNegocio.__table__, models.TableroProduccion.__table__, models.ViajeImagen.__table__):
             table.create(engine)
         db = sessionmaker(bind=engine)()
         user = models.Empleado(id=10, nombre="Ana", apellido="Perez", email="a@x", documento="1", fecha_contratacion=date(2020,1,1), activo=True, porcentaje=0)
         db.add_all([
-            user, models.Proveedor(id=20, razon_social="Alcogreen", activo=True),
+            user,
+            models.Cliente(id=21, razon_social="Alcogreen", activo=True),
+            models.Proveedor(id=20, razon_social="Forestal Paraguay", activo=True),
             models.UnidadNegocio(id=3, descripcion="Transporte", activo=True),
             models.Equipo(id=30, descripcion="Camion", patente="ABC123", nro_chasis="c", nro_motor="m", tipo_movil_id=1, activo=True, movil_asociado=0, ult_hr_km=0),
         ]); db.commit()
         saved = storage.save_temp(b"\xff\xd8\xffdata", "ticket.jpg", "image/jpeg")
         request = schemas.TripImageConfirmRequest(
             upload_token=saved.token, fecha_remision=date(2026,7,13), fecha_recepcion=date(2026,7,13),
-            numero_remision_fpv="002-003-0003677", proveedor_id=20, patente="ABC123",
+            numero_remision_fpv="002-003-0003677", cliente_id=21, proveedor_id=20, patente="ABC123",
             unidad_negocio_id=3, peso_bruto_destino=49.690, tara_destino=17.080,
             neto_destino=32.610, observaciones="revisado",
         )
         return db, storage, user, request, sessionmaker(bind=engine)
 
-    def test_analysis_saves_bounded_image_normalizes_and_matches_unique_provider(self):
+    def test_analysis_resolves_unique_active_client_and_provider(self):
         from image_storage import ImageStorage
         from trip_image_service import TripImageService
         import models
@@ -403,49 +406,79 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         self.addCleanup(root.cleanup)
         storage = ImageStorage(Path(root.name).resolve(), "x" * 32)
         vision_data = {
-            "fecha_remision": "2026-07-13", "remito_tipo": "002",
-            "remito_sucursal": "003", "remito_numero": "0003677",
-            "proveedor_candidato": "Alcogreen S.A.", "peso_bruto": 49690,
-            "tara": 17080, "neto": 32610, "unidad_peso": "kg",
-            "patente_observada": "ABC123", "chofer_observado": "Otro",
+            "fecha_remision": "2026-07-17", "remito_tipo": "002",
+            "remito_sucursal": "003", "remito_numero": "0003755",
+            "cliente_candidato": "Alcogreen S.A.",
+            "proveedor_candidato": "Forestal Paraguay S.A.",
+            "peso_bruto": 48250, "tara": 16460, "neto": 31790, "unidad_peso": "kg",
+            "patente_observada": "AAXO300", "chofer_observado": "YVAN PINTOS",
             "confidence": {"fecha_remision": .9}, "warnings": ["revisar"],
         }
         vision = type("Vision", (), {"analyze": lambda self, path: vision_data})()
         engine = create_engine("sqlite:///:memory:")
+        models.Cliente.__table__.create(engine)
         models.Proveedor.__table__.create(engine)
         db = sessionmaker(bind=engine)()
-        db.add(models.Proveedor(id=7, razon_social="ALCOGREEN SRL", activo=True)); db.commit()
+        db.add_all([
+            models.Cliente(id=7, razon_social="ALCOGREEN SRL", activo=True),
+            models.Proveedor(id=9, razon_social="FORESTAL PARAGUAY SA", activo=True),
+        ])
+        db.commit()
         result = TripImageService(db, storage, vision).analyze(
             b"\xff\xd8\xffdata", "ticket.jpg", "image/jpeg"
         )
-        self.assertEqual(result["proposal"]["proveedor_id"], 7)
-        self.assertEqual(result["proposal"]["numero_remision_fpv"], "002-003-0003677")
-        self.assertEqual(result["proposal"]["neto_destino"], Decimal("32.610"))
-        self.assertEqual(result["proposal"]["patente_observada"], "ABC123")
-        db.add(models.Proveedor(id=8, razon_social="Alcogreen SA", activo=True)); db.commit()
+        self.assertEqual(result["proposal"]["cliente_id"], 7)
+        self.assertEqual(result["proposal"]["cliente_candidato"], "Alcogreen S.A.")
+        self.assertEqual(result["proposal"]["proveedor_id"], 9)
+        self.assertEqual(result["proposal"]["proveedor_candidato"], "Forestal Paraguay S.A.")
+        self.assertEqual(result["proposal"]["numero_remision_fpv"], "002-003-0003755")
+        self.assertEqual(result["proposal"]["neto_destino"], Decimal("31.790"))
+        self.assertEqual(result["proposal"]["patente_observada"], "AAXO300")
+
+        db.add(models.Cliente(id=8, razon_social="Alcogreen SA", activo=True)); db.commit()
         ambiguous = TripImageService(db, storage, vision).analyze(b"\xff\xd8\xffmore", "a.jpg", "image/jpeg")
-        self.assertIsNone(ambiguous["proposal"]["proveedor_id"])
-        self.assertTrue(any("coincidencia activa unica" in item for item in ambiguous["proposal"]["warnings"]))
+        self.assertIsNone(ambiguous["proposal"]["cliente_id"])
+        self.assertEqual(ambiguous["proposal"]["proveedor_id"], 9)
+        self.assertTrue(any("Cliente sin coincidencia activa unica" in item for item in ambiguous["proposal"]["warnings"]))
+
         db.query(models.Proveedor).delete(); db.commit()
         missing = TripImageService(db, storage, vision).analyze(b"\xff\xd8\xfflast", "b.jpg", "image/jpeg")
         self.assertIsNone(missing["proposal"]["proveedor_id"])
-
-        vision_data["proveedor_candidato"] = "\u00d1and\u00fa S.A."
-        db.add(models.Proveedor(id=9, razon_social="NANDU SRL", activo=True)); db.commit()
-        accented = TripImageService(db, storage, vision).analyze(b"\xff\xd8\xffaccent", "c.jpg", "image/jpeg")
-        self.assertEqual(accented["proposal"]["proveedor_id"], 9)
+        self.assertTrue(any("Proveedor sin coincidencia activa unica" in item for item in missing["proposal"]["warnings"]))
 
     def test_confirm_schema_does_not_accept_identity_fields(self):
         from schemas import TripImageConfirmRequest
         with self.assertRaises(ValueError):
             TripImageConfirmRequest(
                 upload_token="x", fecha_remision=date(2026,7,13), fecha_recepcion=date(2026,7,13),
-                numero_remision_fpv="002-003-0003677", proveedor_id=1, patente="ABC",
+                numero_remision_fpv="002-003-0003677", cliente_id=1, proveedor_id=1, patente="ABC",
                 unidad_negocio_id=1, peso_bruto_destino=2, tara_destino=1,
                 neto_destino=1, chofer_id=999,
             )
 
-    def test_confirm_uses_current_user_and_is_idempotent(self):
+    def test_confirm_schema_requires_client_and_provider(self):
+        import schemas
+
+        valid = {
+            "upload_token": "x",
+            "fecha_remision": date(2026, 7, 17),
+            "fecha_recepcion": date(2026, 7, 17),
+            "numero_remision_fpv": "002-003-0003755",
+            "cliente_id": 21,
+            "proveedor_id": 20,
+            "patente": "ABC123",
+            "unidad_negocio_id": 3,
+            "peso_bruto_destino": 48.250,
+            "tara_destino": 16.460,
+            "neto_destino": 31.790,
+        }
+        for missing in ("cliente_id", "proveedor_id"):
+            payload = dict(valid)
+            payload.pop(missing)
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                schemas.TripImageConfirmRequest(**payload)
+
+    def test_confirm_uses_current_user_persists_both_catalogs_and_is_idempotent(self):
         from trip_image_service import TripImageService
         import models
         db, storage, user, request, factory = self.make_confirm_fixture()
@@ -455,7 +488,8 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         self.assertEqual(first, second)
         trip = db.get(models.TableroProduccion, first["viaje_id"])
         self.assertEqual(trip.empleado_id, user.id)
-        self.assertIsNone(trip.cliente_id)
+        self.assertEqual(trip.cliente_id, 21)
+        self.assertEqual(trip.proveedor_id, 20)
         self.assertTrue(trip.pesaje_unico)
         self.assertEqual(trip.neto_origen, Decimal("0.00"))
         self.assertEqual(trip.bruto_destino, Decimal("49.69"))
@@ -472,6 +506,39 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         with self.assertRaises(HTTPException) as denied:
             service.confirm(request, other)
         self.assertEqual(denied.exception.status_code, 403)
+
+    def test_confirm_rejects_invalid_client_and_provider_without_writes(self):
+        from trip_image_service import TripImageService
+        import models
+
+        for catalog in ("cliente", "proveedor"):
+            db, storage, user, request, factory = self.make_confirm_fixture()
+            setattr(request, f"{catalog}_id", 999)
+            service = TripImageService(db, storage, object(), session_factory=factory)
+            with self.subTest(catalog=catalog), self.assertRaises(HTTPException) as error:
+                service.confirm(request, user)
+            self.assertEqual(error.exception.status_code, 400)
+            self.assertEqual(db.query(models.TableroProduccion).count(), 0)
+            self.assertEqual(db.query(models.ViajeImagen).count(), 0)
+
+    def test_confirm_rejects_inactive_client_and_provider_without_writes(self):
+        from trip_image_service import TripImageService
+        import models
+
+        for catalog, model, entity_id in (
+            ("cliente", models.Cliente, 21),
+            ("proveedor", models.Proveedor, 20),
+        ):
+            db, storage, user, request, factory = self.make_confirm_fixture()
+            entity = db.get(model, entity_id)
+            entity.activo = False
+            db.commit()
+            service = TripImageService(db, storage, object(), session_factory=factory)
+            with self.subTest(catalog=catalog), self.assertRaises(HTTPException) as error:
+                service.confirm(request, user)
+            self.assertEqual(error.exception.status_code, 400)
+            self.assertEqual(db.query(models.TableroProduccion).count(), 0)
+            self.assertEqual(db.query(models.ViajeImagen).count(), 0)
 
     def test_commit_failure_compensates_and_retry_succeeds(self):
         from trip_image_service import TripImageService
