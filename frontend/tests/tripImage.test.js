@@ -97,7 +97,8 @@ const catalog = {
   empleados: [{ id: 7, nombre: ' Ana ', apellido: ' Pérez ', activo: true, meta: { secret: 'user' } }],
   equipos: [{ id: 2, patente: 'AB 123 CD', descripcion: ' Camión ', activo: true, meta: { secret: 'truck' } }],
   unidadesNegocio: [{ id: 4, descripcion: ' Forestal ', prefijo: ' F ', activo: true, meta: { secret: 'unit' } }],
-  proveedores: [{ id: 8, nombre: 'Proveedor', activo: true }, { id: 9, nombre: 'Inactivo', activo: false }],
+  clientes: [{ id: 10, razon_social: 'Alcogreen', activo: true }, { id: 11, razon_social: 'Inactivo', activo: false }],
+  proveedores: [{ id: 8, razon_social: 'Forestal Paraguay', activo: true }, { id: 9, razon_social: 'Inactivo', activo: false }],
 }
 
 test('readTripImageSettings parses storage, normalizes config and matches active catalogs', () => {
@@ -107,12 +108,14 @@ test('readTripImageSettings parses storage, normalizes config and matches active
     patente: 'AB 123 CD', equipoId: 2,
     equipo: { id: 2, patente: 'AB 123 CD', descripcion: 'Camión', activo: true },
     unidadNegocioId: 4,
-    unidadNegocio: { id: 4, descripcion: 'Forestal', prefijo: 'F', activo: true }, activeProviderIds: [8],
+    unidadNegocio: { id: 4, descripcion: 'Forestal', prefijo: 'F', activo: true },
+    activeClientIds: [10], activeProviderIds: [8],
     missing: [], errors: [], complete: true,
   })
   assert.ok(Object.isFrozen(result))
   assert.ok(Object.isFrozen(result.user) && Object.isFrozen(result.equipo) && Object.isFrozen(result.unidadNegocio))
-  assert.ok(Object.isFrozen(result.activeProviderIds) && Object.isFrozen(result.missing) && Object.isFrozen(result.errors))
+  assert.ok(Object.isFrozen(result.activeClientIds) && Object.isFrozen(result.activeProviderIds))
+  assert.ok(Object.isFrozen(result.missing) && Object.isFrozen(result.errors))
   assert.equal('meta' in result.user, false)
   assert.equal('meta' in result.equipo, false)
   assert.equal('meta' in result.unidadNegocio, false)
@@ -130,10 +133,11 @@ test('readTripImageSettings safely reports corrupt, missing or inactive settings
 test('readTripImageSettings requires explicit active flags and tolerates throwing storage', () => {
   const missingFlags = {
     empleados: [{ id: 7, nombre: 'Ana' }], equipos: [{ id: 2, patente: 'AB 123 CD' }],
-    unidadesNegocio: [{ id: 4 }], proveedores: [{ id: 8 }],
+    unidadesNegocio: [{ id: 4 }], clientes: [{ id: 10 }], proveedores: [{ id: 8 }],
   }
   const inactive = readTripImageSettings({ storage: storage({ user: '{"id":7}', default_patente: 'AB 123 CD', default_unidad_negocio: '4' }), catalog: missingFlags })
   assert.equal(inactive.complete, false)
+  assert.deepEqual(inactive.activeClientIds, [])
   assert.deepEqual(inactive.activeProviderIds, [])
   const throwing = readTripImageSettings({ storage: { getItem: () => { throw new Error('C:\\secret token') } }, catalog })
   assert.equal(throwing.complete, false)
@@ -141,7 +145,9 @@ test('readTripImageSettings requires explicit active flags and tolerates throwin
 })
 
 const analysis = { upload_token: 'opaque', proposal: {
-  fecha_remision: '2026-07-12', numero_remision_fpv: '001-002-0000003', proveedor_id: 8,
+  fecha_remision: '2026-07-12', numero_remision_fpv: '001-002-0000003',
+  cliente_id: 10, cliente_candidato: 'Alcogreen S.A.',
+  proveedor_id: 8, proveedor_candidato: 'Forestal Paraguay S.A.',
   peso_bruto_destino: 49.69, tara_destino: '17.080', neto_destino: 32.61,
   patente_observada: 'ZZ999ZZ', chofer_observado: 'Otra Persona', confidence: 0.91, warnings: ['borroso'],
 } }
@@ -152,6 +158,10 @@ test('createReviewModel exposes only concrete configuration mismatches', () => {
   assert.equal(review.upload_token, 'opaque')
   assert.equal(review.fecha_recepcion, '2026-07-13')
   assert.equal(review.numero_remision_fpv, '001-002-0000003')
+  assert.equal(review.cliente_id, 10)
+  assert.equal(review.cliente_candidato, 'Alcogreen S.A.')
+  assert.equal(review.proveedor_id, 8)
+  assert.equal(review.proveedor_candidato, 'Forestal Paraguay S.A.')
   assert.deepEqual([review.peso_bruto_destino, review.tara_destino, review.neto_destino], ['49.690', '17.080', '32.610'])
   assert.equal(review.observaciones, '')
   assert.equal(review.config.patente, 'AB 123 CD')
@@ -240,12 +250,13 @@ test('buildConfirmPayload emits exact backend fields and takes config only from 
   review.patente = 'OCR-CANNOT-WIN'
   const payload = buildConfirmPayload(review, settings)
   assert.deepEqual(Object.keys(payload), [
-    'upload_token', 'fecha_remision', 'fecha_recepcion', 'numero_remision_fpv', 'proveedor_id', 'patente',
+    'upload_token', 'fecha_remision', 'fecha_recepcion', 'numero_remision_fpv', 'cliente_id', 'proveedor_id', 'patente',
     'unidad_negocio_id', 'peso_bruto_destino', 'tara_destino', 'neto_destino', 'observaciones',
   ])
   assert.deepEqual(payload, {
     upload_token: 'opaque', fecha_remision: '2026-07-12', fecha_recepcion: '2026-07-13',
-    numero_remision_fpv: '001-002-0000003', proveedor_id: 8, patente: 'AB 123 CD', unidad_negocio_id: 4,
+    numero_remision_fpv: '001-002-0000003', cliente_id: 10, proveedor_id: 8,
+    patente: 'AB 123 CD', unidad_negocio_id: 4,
     peso_bruto_destino: 49.69, tara_destino: 17.08, neto_destino: 32.61, observaciones: 'controlado',
   })
 })
@@ -255,7 +266,8 @@ test('buildConfirmPayload validates dates, remito, provider, config, positive we
   for (const mutate of [
     (r) => { r.fecha_remision = '13/07/2026' }, (r) => { r.numero_remision_fpv = '1-2-3' },
     (r) => { r.fecha_remision = '2026-02-30' },
-    (r) => { r.proveedor_id = null }, (r) => { r.peso_bruto_destino = '0' },
+    (r) => { r.cliente_id = null }, (r) => { r.proveedor_id = null },
+    (r) => { r.peso_bruto_destino = '0' },
     (r) => { r.neto_destino = '32.590' },
   ]) {
     const invalid = structuredClone(valid)
@@ -269,9 +281,10 @@ test('buildConfirmPayload validates dates, remito, provider, config, positive we
     { ...settings, unidadNegocio: null, complete: true },
     { ...settings, patente: 'FAKE', complete: true },
     { ...settings, unidadNegocioId: 999, complete: true },
+    { ...settings, activeClientIds: [], complete: true },
     { ...settings, activeProviderIds: [], complete: true },
     { ...settings, user: { ...settings.user, activo: false }, complete: true },
-  ]) assert.throws(() => buildConfirmPayload(valid, fake), /configuración|proveedor/i)
+  ]) assert.throws(() => buildConfirmPayload(valid, fake), /configuración|cliente|proveedor/i)
 })
 
 test('buildConfirmPayload trims token and rejects blank or unauthorized provider', () => {
@@ -280,6 +293,9 @@ test('buildConfirmPayload trims token and rejects blank or unauthorized provider
   valid.upload_token = '   '
   assert.throws(() => buildConfirmPayload(valid, settings), /imagen/i)
   valid.upload_token = 'opaque'
+  valid.cliente_id = 11
+  assert.throws(() => buildConfirmPayload(valid, settings), /cliente/i)
+  valid.cliente_id = 10
   valid.proveedor_id = 9
   assert.throws(() => buildConfirmPayload(valid, settings), /proveedor/i)
 })

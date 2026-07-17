@@ -51,6 +51,10 @@ export const readTripImageSettings = ({ storage, catalog = {} }) => {
   const user = userSnapshot(list(catalog.empleados).find((item) => active(item) && positiveInteger(item.id) === userId))
   const equipo = equipmentSnapshot(list(catalog.equipos).find((item) => active(item) && normalizedText(item.patente) === normalizedText(patente)))
   const unidadNegocio = unitSnapshot(list(catalog.unidadesNegocio).find((item) => active(item) && positiveInteger(item.id) === unidadNegocioId))
+  const activeClientIds = Object.freeze(list(catalog.clientes)
+    .filter(active)
+    .map((item) => positiveInteger(item.id))
+    .filter(Boolean))
   const activeProviderIds = Object.freeze(list(catalog.proveedores)
     .filter(active)
     .map((item) => positiveInteger(item.id))
@@ -67,6 +71,7 @@ export const readTripImageSettings = ({ storage, catalog = {} }) => {
     equipo,
     unidadNegocioId: unidadNegocio ? positiveInteger(unidadNegocio.id) : null,
     unidadNegocio,
+    activeClientIds,
     activeProviderIds,
     missing: Object.freeze(missing),
     errors: Object.freeze(errors),
@@ -128,6 +133,8 @@ export const createReviewModel = (analysis, settings, today) => {
     fecha_remision: proposal.fecha_remision || '',
     fecha_recepcion: today,
     numero_remision_fpv: proposal.numero_remision_fpv || '',
+    cliente_id: proposal.cliente_id ?? null,
+    cliente_candidato: proposal.cliente_candidato ?? null,
     proveedor_id: proposal.proveedor_id ?? null,
     proveedor_candidato: proposal.proveedor_candidato ?? null,
     peso_bruto_destino: formatWeight(proposal.peso_bruto_destino),
@@ -180,6 +187,10 @@ export const buildConfirmPayload = (review, settings) => {
   if (brutoM <= 0 || taraM < 0 || netoM <= 0) throw new TypeError('Los pesos bruto y neto deben ser mayores que cero.')
   if (Math.abs((brutoM - taraM) - netoM) > 10) throw new TypeError('Los pesos no cierran dentro de la tolerancia permitida.')
   if (!REMITO.test(String(review?.numero_remision_fpv))) throw new TypeError('El remito debe tener formato 000-000-0000000.')
+  const clienteId = positiveInteger(review?.cliente_id)
+  if (!clienteId || !Array.isArray(settings?.activeClientIds) || !settings.activeClientIds.includes(clienteId)) {
+    throw new TypeError('Seleccioná un cliente activo válido.')
+  }
   const proveedorId = positiveInteger(review?.proveedor_id)
   if (!proveedorId || !Array.isArray(settings?.activeProviderIds) || !settings.activeProviderIds.includes(proveedorId)) {
     throw new TypeError('Seleccioná un proveedor activo válido.')
@@ -191,6 +202,7 @@ export const buildConfirmPayload = (review, settings) => {
     fecha_remision: requireDate(review.fecha_remision),
     fecha_recepcion: requireDate(review.fecha_recepcion),
     numero_remision_fpv: review.numero_remision_fpv,
+    cliente_id: clienteId,
     proveedor_id: proveedorId,
     patente: settings.patente,
     unidad_negocio_id: settings.unidadNegocioId,

@@ -34,6 +34,7 @@ const failedStep = ref('')
 const fileInput = ref(null)
 const lifecycle = createTripImageLifecycle()
 
+const activeClients = computed(() => catalog.clientes.filter((item) => item.activo === true))
 const activeProviders = computed(() => catalog.proveedores.filter((item) => item.activo === true))
 const busy = computed(() => state.value === 'processing' || state.value === 'confirming')
 const offline = computed(() => catalog.isOffline || (typeof navigator !== 'undefined' && navigator.onLine === false))
@@ -249,7 +250,8 @@ onUnmounted(() => {
           <label class="text-xs font-medium text-gray-600 dark:text-gray-300">Fecha recepción<input v-model="review.fecha_recepcion" required type="date" class="mt-1 min-h-11 w-full rounded-lg border p-2 dark:border-gray-600 dark:bg-gray-700"></label>
         </div>
         <label class="block text-xs font-medium text-gray-600 dark:text-gray-300">Remito FGPY completo<input v-model.trim="review.numero_remision_fpv" required type="text" inputmode="numeric" placeholder="000-000-0000000" class="mt-1 min-h-11 w-full rounded-lg border p-2 font-mono dark:border-gray-600 dark:bg-gray-700"></label>
-        <label class="block text-xs font-medium text-gray-600 dark:text-gray-300">Proveedor<select v-model.number="review.proveedor_id" required class="mt-1 min-h-11 w-full rounded-lg border p-2 dark:border-gray-600 dark:bg-gray-700"><option :value="null">Seleccionar proveedor</option><option v-for="provider in activeProviders" :key="provider.id" :value="provider.id">{{ provider.razon_social || provider.nombre || provider.descripcion }}</option></select></label>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-300">Cliente<select v-model.number="review.cliente_id" required aria-label="Cliente" class="mt-1 min-h-11 w-full rounded-lg border p-2 dark:border-gray-600 dark:bg-gray-700"><option :value="null">Seleccionar cliente</option><option v-for="client in activeClients" :key="client.id" :value="client.id">{{ client.razon_social || client.nombre || client.descripcion }}</option></select></label>
+        <label class="block text-xs font-medium text-gray-600 dark:text-gray-300">Proveedor<select v-model.number="review.proveedor_id" required aria-label="Proveedor" class="mt-1 min-h-11 w-full rounded-lg border p-2 dark:border-gray-600 dark:bg-gray-700"><option :value="null">Seleccionar proveedor</option><option v-for="provider in activeProviders" :key="provider.id" :value="provider.id">{{ provider.razon_social || provider.nombre || provider.descripcion }}</option></select></label>
         <div class="grid grid-cols-3 gap-2">
           <label class="text-xs font-medium text-gray-600 dark:text-gray-300">Bruto (TN)<input v-model="review.peso_bruto_destino" required type="number" min="0" step="0.001" inputmode="decimal" class="mt-1 min-h-11 w-full min-w-0 rounded-lg border p-2 dark:border-gray-600 dark:bg-gray-700"></label>
           <label class="text-xs font-medium text-gray-600 dark:text-gray-300">Tara (TN)<input v-model="review.tara_destino" required type="number" min="0" step="0.001" inputmode="decimal" class="mt-1 min-h-11 w-full min-w-0 rounded-lg border p-2 dark:border-gray-600 dark:bg-gray-700"></label>

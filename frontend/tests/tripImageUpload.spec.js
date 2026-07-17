@@ -13,7 +13,14 @@ const mocks = vi.hoisted(() => ({
   revokeUrl: vi.fn(),
   catalog: {
     empleados: [{ id: 7, nombre: 'Ana', apellido: 'Pérez', activo: true }],
-    proveedores: [{ id: 8, razon_social: 'Proveedor activo', activo: true }],
+    clientes: [
+      { id: 10, razon_social: 'Alcogreen', activo: true },
+      { id: 11, razon_social: 'Cliente inactivo', activo: false },
+    ],
+    proveedores: [
+      { id: 8, razon_social: 'Forestal Paraguay', activo: true },
+      { id: 9, razon_social: 'Proveedor inactivo', activo: false },
+    ],
     equipos: [{ id: 2, patente: 'AB 123 CD', descripcion: 'Camión', activo: true }],
     unidadesNegocio: [{ id: 4, descripcion: 'Forestal', prefijo: 'F', activo: true }],
     isOffline: false,
@@ -40,7 +47,9 @@ vi.mock('../src/services/tripImage.js', async () => {
 import TripImageUpload from '../src/views/TripImageUpload.vue'
 
 const analysis = { upload_token: 'opaque', proposal: {
-  fecha_remision: '2026-07-12', numero_remision_fpv: '001-002-0000003', proveedor_id: 8,
+  fecha_remision: '2026-07-12', numero_remision_fpv: '001-002-0000003',
+  cliente_id: 10, cliente_candidato: 'Alcogreen S.A.',
+  proveedor_id: 8, proveedor_candidato: 'Forestal Paraguay S.A.',
   peso_bruto_destino: 49.69, tara_destino: 17.08, neto_destino: 32.61,
   warnings: [],
 } }
@@ -123,6 +132,37 @@ describe('TripImageUpload', () => {
     expect(wrapper.text()).not.toContain('Revisá la configuración')
   })
 
+  it('renders active client and provider selectors with OCR proposals selected', async () => {
+    const wrapper = await mountView()
+    await selectFile(wrapper, file())
+
+    const client = wrapper.get('select[aria-label="Cliente"]')
+    const provider = wrapper.get('select[aria-label="Proveedor"]')
+    expect(client.element.value).toBe('10')
+    expect(provider.element.value).toBe('8')
+    expect(client.text()).toContain('Alcogreen')
+    expect(client.text()).not.toContain('Cliente inactivo')
+    expect(provider.text()).toContain('Forestal Paraguay')
+    expect(provider.text()).not.toContain('Proveedor inactivo')
+  })
+
+  it.each([
+    ['cliente', { cliente_id: null }, 'Seleccioná un cliente activo válido.'],
+    ['proveedor', { proveedor_id: null }, 'Seleccioná un proveedor activo válido.'],
+  ])('does not confirm without %s', async (_label, proposalChange, message) => {
+    mocks.analyze.mockResolvedValueOnce({
+      ...analysis,
+      proposal: { ...analysis.proposal, ...proposalChange },
+    })
+    const wrapper = await mountView()
+    await selectFile(wrapper, file())
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(mocks.confirm).not.toHaveBeenCalled()
+    expect(wrapper.text()).toContain(message)
+  })
+
   it('renders one compact alert only for concrete configuration mismatches', async () => {
     mocks.analyze.mockResolvedValueOnce({
       ...analysis,
@@ -158,6 +198,8 @@ describe('TripImageUpload', () => {
     expect(retry).toBeTruthy()
     await retry.trigger('click')
     expect(wrapper.get('textarea').element.value).toBe('editado por operador')
+    expect(wrapper.get('select[aria-label="Cliente"]').element.value).toBe('10')
+    expect(wrapper.get('select[aria-label="Proveedor"]').element.value).toBe('8')
   })
 
   it('does not create or replace a confirmed preview after unmount', async () => {
