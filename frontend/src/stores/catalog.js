@@ -32,11 +32,11 @@ export const useCatalogStore = defineStore('catalog', {
                 const results = settled.map(r => (r.status === 'fulfilled' ? r.value : null));
                 const [empRes, provRes, eqRes, panRes, unRes, cliRes] = results;
 
-                if (!cliRes) console.warn('Advertencia: /clientes no respondiÃ³ correctamente o devolviÃ³ error');
+                if (!cliRes) console.warn('Advertencia: /clientes no respondió correctamente o devolvió error');
 
-                console.log('ðŸ” Respuesta raw de paÃ±oles:', panRes);
-                console.log('ðŸ” panRes.data:', panRes.data);
-                console.log('ðŸ” Tipo de panRes.data:', typeof panRes.data, Array.isArray(panRes.data));
+                console.log('🔍 Respuesta raw de pañoles:', panRes);
+                console.log('🔍 panRes.data:', panRes.data);
+                console.log('🔍 Tipo de panRes.data:', typeof panRes.data, Array.isArray(panRes.data));
 
                 this.empleados = Array.isArray(empRes.data) ? empRes.data : [];
                 this.proveedores = Array.isArray(provRes.data) ? provRes.data : [];
@@ -45,7 +45,7 @@ export const useCatalogStore = defineStore('catalog', {
                 this.unidadesNegocio = Array.isArray(unRes.data) ? unRes.data : [];
                 this.clientes = cliRes && Array.isArray(cliRes.data) ? cliRes.data : [];
 
-                console.log('ðŸ“¦ CatÃ¡logos obtenidos:', {
+                console.log('📦 Catálogos obtenidos:', {
                     empleados: this.empleados.length,
                     proveedores: this.proveedores.length,
                     equipos: this.equipos.length,
@@ -53,13 +53,13 @@ export const useCatalogStore = defineStore('catalog', {
                     unidadesNegocio: this.unidadesNegocio.length
                 });
 
-                // Verificar si todos los paÃ±oles tienen id
+                // Verificar si todos los pañoles tienen id
                 const paniolesInvalidos = this.panioles.filter(p => !p.id);
                 if (paniolesInvalidos.length > 0) {
-                    console.error('âŒ PaÃ±oles sin ID:', paniolesInvalidos.length, paniolesInvalidos.slice(0, 5));
+                    console.error('❌ Pañoles sin ID:', paniolesInvalidos.length, paniolesInvalidos.slice(0, 5));
                 }
 
-                console.log('ðŸ” Primeros 3 paÃ±oles:', this.panioles.slice(0, 3));
+                console.log('🔍 Primeros 3 pañoles:', this.panioles.slice(0, 3));
 
                 // Update IDB - Clone deep to remove Vue proxy observers
                 await saveToStore('empleados', JSON.parse(JSON.stringify(this.empleados)));
@@ -68,11 +68,11 @@ export const useCatalogStore = defineStore('catalog', {
                 await saveToStore('clientes', JSON.parse(JSON.stringify(this.clientes)));
                 // Filter out invalid panioles before saving
                 const validPanioles = this.panioles.filter(p => p && p.id);
-                console.log('ðŸ’¾ Guardando paÃ±oles vÃ¡lidos:', validPanioles.length, 'de', this.panioles.length);
+                console.log('💾 Guardando pañoles válidos:', validPanioles.length, 'de', this.panioles.length);
                 await saveToStore('panioles', JSON.parse(JSON.stringify(validPanioles)));
                 await saveToStore('unidadesNegocio', JSON.parse(JSON.stringify(this.unidadesNegocio)));
 
-                console.log('ðŸ’¾ CatÃ¡logos guardados en IndexedDB');
+                console.log('💾 Catálogos guardados en IndexedDB');
 
                 this.isOffline = false;
 
@@ -95,7 +95,7 @@ export const useCatalogStore = defineStore('catalog', {
                 this.panioles = (await getAllFromStore('panioles')) || [];
                 this.unidadesNegocio = (await getAllFromStore('unidadesNegocio')) || [];
 
-                console.log('ðŸ“± CatÃ¡logos cargados desde IndexedDB (offline):', {
+                console.log('📱 Catálogos cargados desde IndexedDB (offline):', {
                     empleados: this.empleados.length,
                     proveedores: this.proveedores.length,
                     equipos: this.equipos.length,

@@ -25,7 +25,7 @@ const form = ref({
   hora_inicio_viaje: '',
   km_inicial: '',
   km_final: '',
-  estado_carga: 'vacÃ­o',
+  estado_carga: 'vacío',
   tipo_maquina_transportada: '',
   origen_carreton: '',
   destino_carreton: '',
@@ -141,12 +141,12 @@ watch(() => form.value.equipo_id, async (equipoId, previousEquipoId) => {
 const submitForm = async () => {
   const faltantes = [];
 
-  if (!form.value.equipo_id) faltantes.push('MÃ³vil');
+  if (!form.value.equipo_id) faltantes.push('Móvil');
   if (!form.value.unidad_negocio_id) faltantes.push('Unidad de negocio');
   if (form.value.km_inicial === '' || Number.isNaN(Number(form.value.km_inicial))) faltantes.push('KM inicial');
   if (form.value.km_final === '' || Number.isNaN(Number(form.value.km_final))) faltantes.push('KM final');
-  if (!form.value.estado_carga) faltantes.push('VacÃ­o o cargado');
-  if (!form.value.tipo_maquina_transportada.trim()) faltantes.push('Tipo de mÃ¡quina transportada');
+  if (!form.value.estado_carga) faltantes.push('Vacío o cargado');
+  if (!form.value.tipo_maquina_transportada.trim()) faltantes.push('Tipo de máquina transportada');
 
   if (faltantes.length > 0) {
     await Swal.fire({
@@ -161,8 +161,8 @@ const submitForm = async () => {
   if (Number(form.value.km_inicial) < 0 || Number(form.value.km_final) < 0) {
     await Swal.fire({
       icon: 'warning',
-      title: 'KM invÃ¡lidos',
-      text: 'Los kilÃ³metros no pueden ser negativos.',
+      title: 'KM inválidos',
+      text: 'Los kilómetros no pueden ser negativos.',
       confirmButtonColor: '#d97706'
     });
     return;
@@ -171,8 +171,8 @@ const submitForm = async () => {
   if (lastKmFinal.value !== null && Number(form.value.km_inicial) < Number(lastKmFinal.value)) {
     const confirmResult = await Swal.fire({
       icon: 'warning',
-      title: 'KM inicial menor que el Ãºltimo registrado',
-      html: `El KM inicial es menor al Ãºltimo KM final registrado (${Number(lastKmFinal.value).toFixed(2)}).<br>Â¿Desea continuar y guardar el registro igual?`,
+      title: 'KM inicial menor que el último registrado',
+      html: `El KM inicial es menor al último KM final registrado (${Number(lastKmFinal.value).toFixed(2)}).<br>¿Desea continuar y guardar el registro igual?`,
       showCancelButton: true,
       confirmButtonText: 'Guardar igual',
       cancelButtonText: 'Cancelar',
@@ -187,7 +187,7 @@ const submitForm = async () => {
   if (Number(form.value.km_final) <= Number(form.value.km_inicial)) {
     await Swal.fire({
       icon: 'warning',
-      title: 'KM invÃ¡lidos',
+      title: 'KM inválidos',
       text: 'El KM final debe ser mayor al KM inicial.',
       confirmButtonColor: '#d97706'
     });
@@ -199,7 +199,7 @@ const submitForm = async () => {
     await Swal.fire({
       icon: 'warning',
       title: 'Usuario no autenticado',
-      text: 'Debe iniciar sesiÃ³n antes de registrar movimientos.',
+      text: 'Debe iniciar sesión antes de registrar movimientos.',
       confirmButtonColor: '#d97706'
     });
     saving.value = false;
@@ -212,10 +212,10 @@ const submitForm = async () => {
 
     await Swal.fire({
       icon: result?.synced ? 'success' : (result?.blocked ? 'error' : 'warning'),
-      title: result?.synced ? 'Guardado' : (result?.blocked ? 'Registro bloqueado' : 'Pendiente de sincronizaciÃ³n'),
+      title: result?.synced ? 'Guardado' : (result?.blocked ? 'Registro bloqueado' : 'Pendiente de sincronización'),
       text: result?.synced
-        ? 'Movimiento de carretÃ³n registrado correctamente.'
-        : (result?.blockedRecords?.[0]?.detail || 'El movimiento quedÃ³ guardado localmente y se enviarÃ¡ cuando haya conexiÃ³n.'),
+        ? 'Movimiento de carretón registrado correctamente.'
+        : (result?.blockedRecords?.[0]?.detail || 'El movimiento quedó guardado localmente y se enviará cuando haya conexión.'),
       timer: result?.synced ? 1500 : undefined,
       showConfirmButton: !result?.synced,
     });
@@ -229,13 +229,13 @@ const submitForm = async () => {
     form.value.km_inicial = Number(form.value.km_final);
     form.value.km_final = '';
     form.value.hora_inicio_viaje = '';
-    form.value.estado_carga = 'vacÃ­o';
+    form.value.estado_carga = 'vacío';
     form.value.tipo_maquina_transportada = '';
     form.value.origen_carreton = '';
     form.value.destino_carreton = '';
   } catch (e) {
     const detail = e?.response?.data?.detail;
-    const message = typeof detail === 'string' ? detail : 'No se pudo registrar el movimiento de carretÃ³n.';
+    const message = typeof detail === 'string' ? detail : 'No se pudo registrar el movimiento de carretón.';
 
     await Swal.fire({
       icon: 'error',
@@ -252,7 +252,7 @@ const submitForm = async () => {
 <template>
   <div class="max-w-md mx-auto p-4 pb-20">
     <header class="flex items-center justify-between mb-6">
-      <h1 class="text-xl font-bold dark:text-white">Movimiento de carretÃ³n</h1>
+      <h1 class="text-xl font-bold dark:text-white">Movimiento de carretón</h1>
       <div class="text-xs px-2 py-1 rounded bg-green-100 text-green-800" v-if="!catalog.isOffline">Conectado</div>
       <div class="text-xs px-2 py-1 rounded bg-orange-100 text-orange-800" v-else>Offline</div>
     </header>
@@ -265,11 +265,11 @@ const submitForm = async () => {
 
       <div>
         <Autocomplete
-          label="MÃ³vil"
+          label="Móvil"
           :items="moviles"
           v-model="form.equipo_id"
-          :displayFn="(item) => `${item.patente} â€¢ ${item.descripcion}`"
-          placeholder="Seleccione un mÃ³vil"
+          :displayFn="(item) => `${item.patente} • ${item.descripcion}`"
+          placeholder="Seleccione un móvil"
         />
         <div class="text-xs text-gray-400 mt-1">Se toma por defecto desde Ajustes, pero se puede cambiar.</div>
       </div>
@@ -294,8 +294,8 @@ const submitForm = async () => {
         <div>
           <label class="block text-xs font-medium text-gray-500 mb-1">KM inicial</label>
           <input v-model.number="form.km_inicial" type="number" step="0.01" :min="0" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white">
-          <div v-if="loadingLastKm" class="text-xs text-gray-400 mt-1">Buscando Ãºltimo kilometraje...</div>
-          <div v-else-if="lastKmFinal !== null" class="text-xs text-gray-400 mt-1">Ãšltimo KM final registrado: {{ Number(lastKmFinal).toFixed(2) }}</div>
+          <div v-if="loadingLastKm" class="text-xs text-gray-400 mt-1">Buscando último kilometraje...</div>
+          <div v-else-if="lastKmFinal !== null" class="text-xs text-gray-400 mt-1">Último KM final registrado: {{ Number(lastKmFinal).toFixed(2) }}</div>
         </div>
         <div>
           <label class="block text-xs font-medium text-gray-500 mb-1">KM final</label>
@@ -304,29 +304,29 @@ const submitForm = async () => {
       </div>
 
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">VacÃ­o o cargado</label>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Vacío o cargado</label>
         <select v-model="form.estado_carga" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white">
-          <option value="vacÃ­o">VacÃ­o</option>
+          <option value="vacío">Vacío</option>
           <option value="cargado">Cargado</option>
         </select>
       </div>
 
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">Tipo de mÃ¡quina transportada</label>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Tipo de máquina transportada</label>
         <input v-model="form.tipo_maquina_transportada" type="text" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white" placeholder="Ej: Excavadora, skidder, topadora">
         <div class="text-xs text-gray-400 mt-1">Se guarda en observaciones dentro de `tablero_produccion`.</div>
       </div>
 
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">Origen del carretÃ³n</label>
-        <input v-model="form.origen_carreton" type="text" maxlength="100" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white" placeholder="DirecciÃ³n o lugar de origen">
-        <div class="text-xs text-gray-400 mt-1">MÃ¡x. 100 caracteres.</div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Origen del carretón</label>
+        <input v-model="form.origen_carreton" type="text" maxlength="100" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white" placeholder="Dirección o lugar de origen">
+        <div class="text-xs text-gray-400 mt-1">Máx. 100 caracteres.</div>
       </div>
 
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">Destino del carretÃ³n</label>
-        <input v-model="form.destino_carreton" type="text" maxlength="100" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white" placeholder="DirecciÃ³n o lugar de destino">
-        <div class="text-xs text-gray-400 mt-1">MÃ¡x. 100 caracteres.</div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Destino del carretón</label>
+        <input v-model="form.destino_carreton" type="text" maxlength="100" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white" placeholder="Dirección o lugar de destino">
+        <div class="text-xs text-gray-400 mt-1">Máx. 100 caracteres.</div>
       </div>
 
       <button :disabled="saving" type="submit" class="w-full bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 text-white py-3 rounded-lg font-medium shadow-lg mt-4">

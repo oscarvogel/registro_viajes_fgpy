@@ -121,10 +121,10 @@ const pendingForCurrent = computed(() => {
 const confirmRemove = async (record) => {
     const res = await Swal.fire({
         title: 'Eliminar registro pendiente?',
-        text: 'Se eliminarÃ¡ el registro local y no podrÃ¡ recuperarse. Â¿Continuar?',
+        text: 'Se eliminará el registro local y no podrá recuperarse. ¿Continuar?',
         icon: 'warning',
         showCancelButton: true,
-        confirmButtonText: 'SÃ­, eliminar',
+        confirmButtonText: 'Sí, eliminar',
         cancelButtonText: 'Cancelar',
         confirmButtonColor: '#DC2626'
     });
@@ -162,14 +162,14 @@ const confirmRemove = async (record) => {
 
     <!-- Pending / Offline Records -->
     <div v-if="syncStore.pendingRecords.length > 0" class="mb-6">
-        <h2 class="text-sm font-semibold text-orange-600 mb-2">Pendientes de SincronizaciÃ³n</h2>
+        <h2 class="text-sm font-semibold text-orange-600 mb-2">Pendientes de Sincronización</h2>
          <div v-for="record in syncStore.pendingRecords" :key="record.local_id" class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow mb-3" :class="record.blocked ? 'border-l-4 border-red-500' : 'border-l-4 border-orange-500'">
             <div class="flex justify-between items-start">
                 <div>
-                    <div class="font-bold">{{ record.record_type === 'carreton' ? (record.tipo_maquina_transportada || 'Movimiento de carretÃ³n') : record.patente }}</div>
+                    <div class="font-bold">{{ record.record_type === 'carreton' ? (record.tipo_maquina_transportada || 'Movimiento de carretón') : record.patente }}</div>
                     <div class="text-sm text-gray-500">
                         {{ record.record_type === 'carreton'
-                            ? `${record.estado_carga} â€¢ KM ${Number(record.km_inicial).toFixed(2)} a ${Number(record.km_final).toFixed(2)}`
+                            ? `${record.estado_carga} • KM ${Number(record.km_inicial).toFixed(2)} a ${Number(record.km_final).toFixed(2)}`
                             : record.numero_remision }}
                     </div>
                     <div v-if="record.record_type === 'carreton' && record.hora_inicio_viaje" class="text-xs text-gray-400 mt-1">
@@ -177,7 +177,7 @@ const confirmRemove = async (record) => {
                     </div>
                 </div>
                 <div class="text-right">
-                    <div class="font-mono">{{ record.record_type === 'carreton' ? 'CarretÃ³n' : `${(record.peso_bruto_origen - record.tara_origen).toFixed(2)} Tn` }}</div>
+                    <div class="font-mono">{{ record.record_type === 'carreton' ? 'Carretón' : `${(record.peso_bruto_origen - record.tara_origen).toFixed(2)} Tn` }}</div>
                     <div class="text-xs" :class="record.blocked ? 'text-red-500' : 'text-orange-500'">{{ record.blocked ? 'Bloqueado' : 'Pendiente' }}</div>
                 </div>
             </div>
@@ -202,7 +202,7 @@ const confirmRemove = async (record) => {
                 </svg>
             </div>
             <div>
-                <div class="text-xs text-gray-500">Viajes en el perÃ­odo</div>
+                <div class="text-xs text-gray-500">Viajes en el período</div>
                 <div class="text-2xl font-bold">{{ totalViajes() }}</div>
             </div>
         </div>
@@ -229,9 +229,9 @@ const confirmRemove = async (record) => {
                 </svg>
             </div>
             <div>
-                <div class="text-xs text-gray-500">Movimientos carretÃ³n</div>
+                <div class="text-xs text-gray-500">Movimientos carretón</div>
                 <div class="text-2xl font-bold">{{ totalMovimientosCarreton() }}</div>
-                <div v-if="currentEquipoId" class="text-xs text-gray-400 mt-1">Pendientes para el mÃ³vil actual: <span class="font-semibold text-amber-600">{{ pendingForCurrent.length }}</span></div>
+                <div v-if="currentEquipoId" class="text-xs text-gray-400 mt-1">Pendientes para el móvil actual: <span class="font-semibold text-amber-600">{{ pendingForCurrent.length }}</span></div>
             </div>
         </div>
         <div class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow flex items-center gap-3">
@@ -245,7 +245,7 @@ const confirmRemove = async (record) => {
             <div>
                 <div class="text-xs text-gray-500">Pendientes offline</div>
                 <div class="text-2xl font-bold">{{ pendingViajes.length + pendingCarreton.length }}</div>
-                <div v-if="syncStore.pendingRecords.some(record => record.blocked)" class="text-xs text-red-500 mt-1">Hay registros bloqueados que requieren revisiÃ³n.</div>
+                <div v-if="syncStore.pendingRecords.some(record => record.blocked)" class="text-xs text-red-500 mt-1">Hay registros bloqueados que requieren revisión.</div>
             </div>
         </div>
     </div>
@@ -255,7 +255,7 @@ const confirmRemove = async (record) => {
             Viajes
         </button>
         <button @click="activeTab = 'carreton'" :class="activeTab === 'carreton' ? 'bg-amber-600 text-white' : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300'" class="flex-1 py-2 rounded-lg font-medium shadow">
-            CarretÃ³n
+            Carretón
         </button>
     </div>
 
@@ -277,7 +277,7 @@ const confirmRemove = async (record) => {
                                             {{ item.patente || 'Sin patente' }}
                                         </div>
                     <div class="text-sm text-gray-500">
-                      {{ item.remito_proveedor || 'Sin remito' }} â€¢ {{ item.chofer }}
+                      {{ item.remito_proveedor || 'Sin remito' }} • {{ item.chofer }}
                     </div>
                 </div>
                 <div class="text-right">
@@ -305,12 +305,12 @@ const confirmRemove = async (record) => {
         </div>
     </div>
     <div v-else class="space-y-3">
-        <div v-if="movimientosCarreton.length === 0" class="text-center text-sm text-gray-500">No hay movimientos de carretÃ³n en este rango.</div>
+        <div v-if="movimientosCarreton.length === 0" class="text-center text-sm text-gray-500">No hay movimientos de carretón en este rango.</div>
         <div v-for="item in movimientosCarreton" :key="item.id" class="bg-white dark:bg-gray-800 p-4 rounded-lg shadow">
             <div class="flex justify-between items-start gap-3">
                 <div>
-                    <div class="font-bold">{{ item.patente || 'Sin mÃ³vil' }}</div>
-                    <div class="text-sm text-gray-500">{{ item.unidad_negocio || 'Sin unidad' }} â€¢ {{ item.chofer }}</div>
+                    <div class="font-bold">{{ item.patente || 'Sin móvil' }}</div>
+                    <div class="text-sm text-gray-500">{{ item.unidad_negocio || 'Sin unidad' }} • {{ item.chofer }}</div>
                 </div>
                 <div class="text-right">
                     <div class="font-bold">{{ Number(item.km_inicial).toFixed(2) }} - {{ Number(item.km_final).toFixed(2) }}</div>
@@ -319,7 +319,7 @@ const confirmRemove = async (record) => {
             </div>
             <div class="text-xs text-gray-400 mt-2">Estado: {{ item.estado_carga || 'Sin estado' }}</div>
             <div v-if="item.hora_inicio_viaje" class="text-xs text-gray-400 mt-1">Inicio viaje: {{ formatTime(item.hora_inicio_viaje) }}</div>
-            <div v-if="item.tipo_maquina_transportada" class="text-xs text-gray-400 mt-1">MÃ¡quina: {{ item.tipo_maquina_transportada }}</div>
+            <div v-if="item.tipo_maquina_transportada" class="text-xs text-gray-400 mt-1">Máquina: {{ item.tipo_maquina_transportada }}</div>
         </div>
     </div>
   </div>

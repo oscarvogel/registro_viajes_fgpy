@@ -84,7 +84,7 @@ const fetchLastKmHora = async (equipoId) => {
 onMounted(async () => {
   await catalog.fetchCatalogues();
 
-  console.log('ðŸš› FuelLoad mounted - PaÃ±oles disponibles:', catalog.panioles.length, catalog.panioles);
+  console.log('🚛 FuelLoad mounted - Pañoles disponibles:', catalog.panioles.length, catalog.panioles);
 
   const defaultPatente = localStorage.getItem('default_patente');
   if (defaultPatente && !form.value.equipo_id) {
@@ -101,9 +101,9 @@ const submitForm = async () => {
   if (!form.value.fecha_carga) faltantes.push('Fecha de carga');
   if (!form.value.litros || form.value.litros <= 0) faltantes.push('Litros cargados');
   if (!form.value.km_hora || form.value.km_hora <= 0) faltantes.push('KM/Hora');
-  if (!form.value.equipo_id) faltantes.push('CamiÃ³n');
+  if (!form.value.equipo_id) faltantes.push('Camión');
   if (!form.value.paniol_id) faltantes.push('Tanque');
-  if (!form.value.remito) faltantes.push('NÂº Remito');
+  if (!form.value.remito) faltantes.push('Nº Remito');
 
   if (faltantes.length > 0) {
     Swal.fire({
@@ -119,8 +119,8 @@ const submitForm = async () => {
   if (form.value.km_hora < lastKmHora.value) {
     Swal.fire({
       icon: 'warning',
-      title: 'KM/Hora invÃ¡lido',
-      text: `El KM/Hora debe ser mayor o igual a ${lastKmHora.value.toFixed(2)} (Ãºltimo registrado)`,
+      title: 'KM/Hora inválido',
+      text: `El KM/Hora debe ser mayor o igual a ${lastKmHora.value.toFixed(2)} (último registrado)`,
       confirmButtonColor: '#007AFF'
     });
     return;
@@ -182,23 +182,23 @@ const submitForm = async () => {
 
       <div>
         <Autocomplete
-          label="CamiÃ³n"
+          label="Camión"
           :items="camiones"
           v-model="form.equipo_id"
-          :displayFn="(e) => `${e.patente} â€¢ ${e.descripcion}`"
+          :displayFn="(e) => `${e.patente} • ${e.descripcion}`"
           placeholder="Configurar en Ajustes"
           :disabled="true"
         />
       </div>
 
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">KM/Hora del camiÃ³n</label>
+        <label class="block text-xs font-medium text-gray-500 mb-1">KM/Hora del camión</label>
         <input v-model.number="form.km_hora" type="number" step="0.01" :min="lastKmHora" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white">
-        <div v-if="lastKmHora > 0" class="text-xs text-gray-500 mt-1">Ãšltimo registrado: {{ lastKmHora.toFixed(2) }}</div>
+        <div v-if="lastKmHora > 0" class="text-xs text-gray-500 mt-1">Último registrado: {{ lastKmHora.toFixed(2) }}</div>
       </div>
 
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">Tanque (PaÃ±ol)</label>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Tanque (Pañol)</label>
         <select v-model="form.paniol_id" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white">
           <option value="" disabled>Seleccione un tanque</option>
           <option v-for="p in catalog.panioles" :key="p.id" :value="p.id">
@@ -208,7 +208,7 @@ const submitForm = async () => {
       </div>
 
       <div>
-        <label class="block text-xs font-medium text-gray-500 mb-1">NÂº Remito</label>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Nº Remito</label>
         <input v-model="form.remito" type="text" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white">
       </div>
 

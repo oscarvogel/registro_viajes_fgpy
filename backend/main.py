@@ -1,6 +1,6 @@
 ﻿from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Query
+from fastapi import Query, UploadFile, File
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
@@ -12,6 +12,7 @@ from typing import List, Optional
 from datetime import datetime, date, time, timedelta, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager
+from starlette.concurrency import run_in_threadpool
 import time as time_module
 import os
 import logging
@@ -25,6 +26,13 @@ from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 import models, schemas, database
+from trip_service import create_trip
+from trip_image_service import TripImageService
+from image_storage import (ImageStorage, ImageStorageError, ImageStorageConfigError,
+                           ImageValidationError, ImageTokenError, ImageTokenExpiredError, ImageStoragePathError)
+from minimax_vision import (MiniMaxVisionClient, MiniMaxVisionError,
+                            MiniMaxVisionConfigurationError, MiniMaxVisionTimeoutError)
+from trip_image_normalization import ExtractionValidationError
 from logger import app_logger, log_api_request, log_user_action, log_system_event, sanitize_for_logging, set_request_context, clear_request_context
 # Initialize Sentry as early as possible
 
@@ -632,193 +640,106 @@ def login(request: schemas.LoginRequest, db: Session = Depends(get_db), http_req
     )
     return {"access_token": access_token, "token_type": "bearer", "user": {"nombre": empleado.nombre, "apellido": empleado.apellido, "id": empleado.id}}
 
+def get_trip_image_storage():
+    return ImageStorage()
+
+
+def get_trip_image_vision():
+    return MiniMaxVisionClient()
+
+
+def get_trip_image_service(db: Session):
+    return TripImageService(db, get_trip_image_storage(), session_factory=database.SessionLocal)
+
+
+def analyze_trip_image_in_worker(data, original_name, mime_type, storage, session_factory=None):
+    factory = session_factory or database.SessionLocal
+    db = factory()
+    try:
+        service = TripImageService(db, storage, get_trip_image_vision(), session_factory=factory)
+        return service.analyze(data, original_name, mime_type)
+    finally:
+        db.close()
+
+
 @api_router.post("/registro-viaje", response_model=schemas.RegistroViajeResponse)
 def create_registro_viaje(
     registro: schemas.RegistroViajeCreate,
     db: Session = Depends(get_db),
     current_user: models.Empleado = Depends(get_current_user),
 ):
-    # LÃ³gica de cÃ¡lculo y mapeo
-    
-    # 1. Calcular ProducciÃ³n (Net Weight in kg or Tn?)
-    # DB has simple fields, looks like we need standard units.
-    # UI: Peso Bruto Origen (Tn), Tara Origen (Tn).
-    # Produccion = (Bruto - Tara) * 1000 to get KG? 
-    # Or keep it in Tn? models.Produccion is Decimal(10,2). 
-    # Let's assume Tn for now as per forestry standards usually.
-    
-    produccion_tn = registro.neto_origen  # neto_origen is already in Tn
-
-    # Prevent duplicate remitos
-    if registro.numero_remision:
-        exists_proveedor = db.query(models.TableroProduccion.id).filter(
-            models.TableroProduccion.remito_proveedor == registro.numero_remision
-        ).first() is not None
-        if exists_proveedor:
-            raise HTTPException(status_code=400, detail="El NÂº Remito Proveedor ya existe")
-
-    if registro.numero_remision_fpv:
-        exists_fgpy = db.query(models.TableroProduccion.id).filter(
-            models.TableroProduccion.remito_fgpy == registro.numero_remision_fpv
-        ).first() is not None
-        if exists_fgpy:
-            raise HTTPException(status_code=400, detail="El NÂº Remito FGPY ya existe")
-    
-    # 2. Validate Chofer
-    empleado = db.query(models.Empleado).filter(models.Empleado.id == registro.chofer_id).first()
-    if not empleado:
-        raise HTTPException(status_code=400, detail="Chofer no encontrado")
-
-    # set request logging context (chofer)
     try:
-        set_request_context(chofer=f"{empleado.apellido} {empleado.nombre}")
-    except Exception:
-        pass
-
-    # 3. Find Equipo (normalize patente)
-    patente = (registro.patente or "").strip().upper()
-    if not patente:
-        raise HTTPException(status_code=400, detail="Patente requerida")
-
-    equipo = db.query(models.Equipo).filter(models.Equipo.patente == patente).first()
-    if not equipo:
-        patente_compact = patente.replace(" ", "")
-        if patente_compact != patente:
-            equipo = db.query(models.Equipo).filter(models.Equipo.patente == patente_compact).first()
-        if not equipo:
-            equipo = db.query(models.Equipo).filter(func.replace(models.Equipo.patente, " ", "") == patente_compact).first()
-
-    if not equipo:
-        raise HTTPException(status_code=400, detail="Patente no encontrada")
-
-    equipo_id = equipo.id
-    try:
-        set_request_context(vehiculo=f"{equipo.patente} - {equipo.descripcion}")
-    except Exception:
-        pass
-
-    # 3. Create Record
-    # We need defaults for many required columns in tablero_produccion that aren't in the form
-    # Build periodo YYYYMM from fecha_remision
-    try:
-        periodo = f"{registro.fecha_remision.year}{registro.fecha_remision.month:02d}"
-    except Exception:
-        periodo = datetime.now().strftime('%Y%m')
-
-    # Validate net weights are numeric and within a reasonable range
-    def validate_neto(name, value):
-        try:
-            v = float(value)
-        except Exception:
-            raise HTTPException(status_code=400, detail=f"Valor invÃ¡lido o faltante: {name} debe ser numÃ©rico (recibido={value})")
-        if v <= 0:
-            raise HTTPException(status_code=400, detail=f"Valor invÃ¡lido: {name} debe ser > 0 (recibido={v})")
-        if v > NETO_MAX_TN:
-            raise HTTPException(status_code=400, detail=f"Valor invÃ¡lido: {name} demasiado grande (> {NETO_MAX_TN} Tn) (recibido={v})")
-        return v
-
-    validate_neto('neto_origen', getattr(registro, 'neto_origen', None))
-    validate_neto('neto_destino', getattr(registro, 'neto_destino', None))
-
-    # Determine cliente/proveedor behavior based on unidad de negocio
-    # Defaults: if one of the fields is missing, store None (NULL) for proveedor, 1 for cliente
-    proveedor_id_val = None  # Allow NULL for proveedor when not provided
-    cliente_id_val = 1
-
-    unidad = None
-    try:
-        if getattr(registro, 'unidad_negocio_id', None) is not None:
-            unidad = db.query(models.UnidadNegocio).filter(models.UnidadNegocio.id == registro.unidad_negocio_id).first()
-    except Exception:
-        unidad = None
-
-    is_tc = False
-    if unidad and unidad.descripcion:
-        try:
-            is_tc = 'Transporte Chip - TC' in unidad.descripcion
-        except Exception:
-            is_tc = False
-
-    # If proveedor_id provided, validate it (DB enforces proveedor existence)
-    if getattr(registro, 'proveedor_id', None) is not None:
-        proveedor_obj = db.query(models.Proveedor).filter(models.Proveedor.id == registro.proveedor_id).first()
-        if not proveedor_obj:
-            raise HTTPException(status_code=400, detail="Proveedor no encontrado")
-        proveedor_id_val = proveedor_obj.id
-
-    # cliente_id may be provided by the client app (used for Transporte Chip - TC)
-    if getattr(registro, 'cliente_id', None) is not None:
-        try:
-            cliente_id_val = int(registro.cliente_id)
-            # Validate cliente exists if model available
-            try:
-                cliente_obj = db.query(models.Cliente).filter(models.Cliente.id == cliente_id_val).first()
-                if not cliente_obj:
-                    raise HTTPException(status_code=400, detail="Cliente no encontrado")
-            except AttributeError:
-                # models.Cliente may not exist in some deployments; skip validation
-                pass
-        except Exception:
-            cliente_id_val = 1
-
-    nuevo_registro = models.TableroProduccion(
-        fecha=registro.fecha_remision, # Or use today?
-        empleado_id=registro.chofer_id,
-        equipo_id=equipo_id,
-        produccion=produccion_tn,
-        remito=0,
-        remito2=0,
-        remito_proveedor = registro.numero_remision,
-        remito_fgpy = registro.numero_remision_fpv,
-        hora=datetime.now().time(),
-        turno="dia", # Logic needed based on time
-        unidad_negocio_id=registro.unidad_negocio_id,
-        cliente_id=(cliente_id_val if cliente_id_val is not None else 1),
-        predio_id=1, # Default
-        periodo=periodo,
-        proveedor_id=proveedor_id_val,  # Can be None (NULL) if not provided
-        # Pesos y medidas (store in origin columns; fallback to destination fields if origin not provided)
-        bruto_destino=(registro.peso_bruto_origen if getattr(registro, 'peso_bruto_origen', None) is not None else getattr(registro, 'peso_bruto_destino', None)),
-        tara_destino=(registro.tara_origen if getattr(registro, 'tara_origen', None) is not None else getattr(registro, 'tara_destino', None)),
-        neto_origen=registro.neto_origen,
-        neto_destino=registro.neto_destino,
-        # Explicit defaults for other NOT NULL columns to avoid DB errors
-        hr_inicio=0.0,
-        hr_fin=0.0,
-        unidad_produccion_id=5, # Default TN transportadas
-        coeficiente=1.0,
-        altura=0.0,
-        ancho=0.0,
-        cantidad_estibas=0.0,
-        largo_madera=0.0,
-        carros=0,
-        plantas=0,
-        hrs_no_operativas=0,
-        carga_piso=0,
-        tipo_operacion_id=21, # Default "Transporte" 
-        lenia_seca=0,
-        carga_rollo=0,
-        carga_lenia=0,
-        tarifa=0.0,
-        tarifa_empresa=0.0,
-        origen_destino_id=1,
-        tabla=None,
-        codigo_tabla=0,
-        origen=(getattr(registro, 'origen', None) or ""),
-        origen_carreton=(getattr(registro, 'origen_carreton', None) or ""),
-        destino_carreton=(getattr(registro, 'destino_carreton', None) or ""),
-        modificado=False,
-        usuario=str(registro.chofer_id) if registro.chofer_id else None,
-        observaciones=registro.observaciones
-    )
-    
-    try:
-        db.add(nuevo_registro)
-        db.commit()
-        db.refresh(nuevo_registro)
+        if registro.chofer_id != current_user.id:
+            raise HTTPException(status_code=403, detail="El chofer debe coincidir con el usuario autenticado")
+        nuevo_registro = create_trip(db, registro, current_user)
         return {"id": nuevo_registro.id, "message": "Viaje registrado OK"}
     finally:
         clear_request_context()
+
+
+@api_router.post("/registro-viaje/imagen/analizar", response_model=schemas.TripImageAnalysisResponse)
+async def analyze_trip_image(file: UploadFile = File(...), current_user: models.Empleado = Depends(get_current_user)):
+    try:
+        storage = get_trip_image_storage()
+        data = await file.read(storage.max_bytes + 1)
+        if len(data) > storage.max_bytes:
+            raise HTTPException(413, "La imagen excede el limite permitido")
+        return await run_in_threadpool(analyze_trip_image_in_worker, data, file.filename or "image", file.content_type or "", storage)
+    except ImageStorageConfigError:
+        raise HTTPException(503, "Servicio de imagen no disponible")
+    except (ImageValidationError, ImageStoragePathError) as exc:
+        raise HTTPException(400, str(exc))
+    except ExtractionValidationError as exc:
+        raise HTTPException(422, str(exc))
+    except MiniMaxVisionConfigurationError:
+        raise HTTPException(503, "Servicio de analisis no disponible")
+    except MiniMaxVisionTimeoutError:
+        raise HTTPException(504, "El analisis excedio el tiempo limite")
+    except MiniMaxVisionError:
+        raise HTTPException(502, "No se pudo analizar la imagen")
+    finally:
+        clear_request_context()
+
+
+@api_router.post("/registro-viaje/imagen/confirmar", response_model=schemas.TripImageConfirmResponse)
+def confirm_trip_image(request: schemas.TripImageConfirmRequest, db: Session = Depends(get_db), current_user: models.Empleado = Depends(get_current_user)):
+    try:
+        return get_trip_image_service(db).confirm(request, current_user)
+    except ImageTokenExpiredError:
+        raise HTTPException(410, "Token de imagen vencido")
+    except ImageTokenError:
+        raise HTTPException(400, "Token de imagen invalido")
+    except ImageStorageConfigError:
+        raise HTTPException(503, "Servicio de imagen no disponible")
+    except (ImageValidationError, ImageStoragePathError):
+        raise HTTPException(400, "La imagen temporal no esta disponible")
+    finally:
+        clear_request_context()
+
+
+@api_router.get("/registro-viaje/imagenes/{image_id}")
+def get_trip_image(image_id: int, db: Session = Depends(get_db), current_user: models.Empleado = Depends(get_current_user)):
+    try:
+        image = db.query(models.ViajeImagen).filter(models.ViajeImagen.id == image_id).first()
+        if not image:
+            raise HTTPException(404, "Imagen no encontrada")
+        if image.viaje.empleado_id != current_user.id and current_user.id not in parse_admin_user_ids():
+            raise HTTPException(403, "No autorizado")
+        expires = image.expires_at.replace(tzinfo=timezone.utc) if image.expires_at.tzinfo is None else image.expires_at
+        if datetime.now(timezone.utc) >= expires:
+            raise HTTPException(410, "Imagen vencida")
+        try:
+            path = get_trip_image_storage().resolve_confirmed(image.storage_path)
+        except ImageStorageConfigError:
+            raise HTTPException(503, "Servicio de imagen no disponible")
+        except (ImageValidationError, ImageStoragePathError, OSError):
+            raise HTTPException(404, "Imagen no disponible")
+        response = FileResponse(path, media_type=image.mime_type, filename=image.original_name)
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+    finally:
+        clear_request_context()
+
 
 @api_router.post("/movimiento-combustible", response_model=schemas.MovimientoCombustibleResponse)
 def create_movimiento_combustible(

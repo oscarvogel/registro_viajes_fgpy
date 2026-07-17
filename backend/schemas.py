@@ -1,6 +1,8 @@
 from pydantic import BaseModel, ConfigDict, field_validator, Field
 from typing import Optional, List, Union
 from datetime import date, time
+from decimal import Decimal
+import math
 
 # --- Login & Token ---
 class Token(BaseModel):
@@ -122,7 +124,9 @@ class RegistroViajeCreate(BaseModel):
     tara_origen: Optional[float] = None # tn (now optional)
     neto_origen: float # tn
     neto_destino: float # tn
-    peso_bruto_destino: float # kg
+    peso_bruto_destino: float # tn
+    tara_destino: Optional[float] = None # tn
+    pesaje_unico: bool = False
     
     chofer_id: int
     patente: str # Or equipo_id if we map it
@@ -130,6 +134,16 @@ class RegistroViajeCreate(BaseModel):
     cliente_id: Optional[int] = None
     
     observaciones: Optional[str] = None
+
+    @field_validator(
+        'peso_bruto_origen', 'tara_origen', 'neto_origen',
+        'peso_bruto_destino', 'tara_destino', 'neto_destino',
+    )
+    @classmethod
+    def reject_non_finite_weights(cls, value):
+        if value is not None and not math.isfinite(value):
+            raise ValueError('El peso debe ser un número finito')
+        return value
 
     # Calculated or Default fields managed by Backend
     # produccion (net weight)
@@ -140,6 +154,69 @@ class RegistroViajeCreate(BaseModel):
 class RegistroViajeResponse(BaseModel):
     id: int
     message: str = "Registro creado exitosamente"
+
+
+class TripImageProposal(BaseModel):
+    fecha_remision: date
+    numero_remision_fpv: str = Field(pattern=r"^[0-9]{3}-[0-9]{3}-[0-9]{7}$")
+    cliente_id: Optional[int] = None
+    cliente_candidato: Optional[str] = None
+    proveedor_id: Optional[int] = None
+    proveedor_candidato: Optional[str] = None
+    peso_bruto_destino: Decimal
+    tara_destino: Decimal
+    neto_destino: Decimal
+    patente_observada: Optional[str] = None
+    chofer_observado: Optional[str] = None
+    confidence: dict[str, float]
+    warnings: List[str]
+
+    @field_validator('peso_bruto_destino', 'tara_destino', 'neto_destino')
+    @classmethod
+    def finite_proposal_weights(cls, value):
+        if not value.is_finite():
+            raise ValueError('El peso debe ser finito')
+        return value
+
+    @field_validator('confidence')
+    @classmethod
+    def valid_confidence(cls, value):
+        if any(not math.isfinite(score) or score < 0 or score > 1 for score in value.values()):
+            raise ValueError('La confianza debe estar entre 0 y 1')
+        return value
+
+
+class TripImageAnalysisResponse(BaseModel):
+    upload_token: str
+    proposal: TripImageProposal
+
+
+class TripImageConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    upload_token: str
+    fecha_remision: date
+    fecha_recepcion: date
+    numero_remision_fpv: str = Field(pattern=r"^[0-9]{3}-[0-9]{3}-[0-9]{7}$")
+    cliente_id: int
+    proveedor_id: int
+    patente: str
+    unidad_negocio_id: int
+    peso_bruto_destino: float
+    tara_destino: float
+    neto_destino: float
+    observaciones: Optional[str] = None
+
+    @field_validator('peso_bruto_destino', 'tara_destino', 'neto_destino')
+    @classmethod
+    def finite_confirm_weights(cls, value):
+        if not math.isfinite(value):
+            raise ValueError('El peso debe ser finito')
+        return value
+
+
+class TripImageConfirmResponse(BaseModel):
+    viaje_id: int
+    imagen_id: int
 
 # --- Historial de Viajes (Outgoing to Frontend) ---
 class HistorialViajeItem(BaseModel):

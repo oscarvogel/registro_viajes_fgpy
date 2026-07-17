@@ -4,7 +4,7 @@ Ejecuta el envío de reportes diarios y otras tareas programadas.
 """
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 from dotenv import load_dotenv
 
@@ -18,8 +18,8 @@ load_dotenv()
 class TaskScheduler:
     """Gestiona tareas programadas del sistema"""
     
-    def __init__(self):
-        self.scheduler = BackgroundScheduler()
+    def __init__(self, scheduler=None):
+        self.scheduler = scheduler or BackgroundScheduler()
         self.report_time = os.getenv("DAILY_REPORT_TIME", "08:00")  # Hora para enviar reporte (HH:MM)
         
     def start(self):
@@ -39,6 +39,25 @@ class TaskScheduler:
             name='Envío de reporte diario',
             replace_existing=True
         )
+
+        if os.getenv("VIAJE_IMAGE_STORAGE_DIR") and os.getenv("IMAGE_TOKEN_SECRET"):
+            cleanup_time = os.getenv("TRIP_IMAGE_CLEANUP_TIME", "03:00")
+            try:
+                cleanup_hour, cleanup_minute = map(int, cleanup_time.split(':'))
+                if not (0 <= cleanup_hour <= 23 and 0 <= cleanup_minute <= 59):
+                    raise ValueError
+            except ValueError:
+                cleanup_hour, cleanup_minute = 3, 0
+                app_logger.warning("Formato de hora de limpieza de imágenes inválido. Usando 03:00.")
+            self.scheduler.add_job(
+                func=self.cleanup_trip_images_job,
+                trigger=CronTrigger(hour=cleanup_hour, minute=cleanup_minute),
+                id="trip_image_cleanup",
+                name="Limpieza de evidencias de viaje",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
         
         # Programar limpieza de logs antiguos (mensual, primer día del mes a las 2 AM)
         self.scheduler.add_job(
@@ -100,6 +119,32 @@ class TaskScheduler:
             
         except Exception as e:
             app_logger.error(f"Error en limpieza de logs: {str(e)}", exc_info=True)
+
+    def cleanup_trip_images_job(self):
+        """Run image cleanup with lazy configuration and DB dependencies."""
+        if not os.getenv("VIAJE_IMAGE_STORAGE_DIR") or not os.getenv("IMAGE_TOKEN_SECRET"):
+            app_logger.info("Limpieza de evidencias omitida: almacenamiento no configurado")
+            return
+        db = None
+        try:
+            from database import SessionLocal
+            from image_storage import ImageStorage
+            from trip_image_cleanup import cleanup_trip_images
+
+            db = SessionLocal()
+            result = cleanup_trip_images(db, ImageStorage(), datetime.now(timezone.utc))
+            app_logger.info(
+                "Limpieza de evidencias completada: vencidas=%d temporales=%d huérfanas=%d inválidas=%d errores=%d",
+                result.expired_deleted, result.temp_deleted, result.orphan_deleted,
+                result.invalid_promotions, len(result.errors),
+            )
+            for code in result.errors:
+                app_logger.warning("Limpieza de evidencias: %s", code)
+        except Exception:
+            app_logger.error("Limpieza de evidencias falló")
+        finally:
+            if db is not None:
+                db.close()
     
     def send_test_report(self):
         """Envía un reporte de prueba inmediatamente (útil para testing)"""
