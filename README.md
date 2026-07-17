@@ -108,7 +108,7 @@ No se deben guardar credenciales, claves JWT, conexiones de base de datos ni arc
 
 ### Carga de viajes desde imagen (OCR)
 
-El flujo **Cargar desde foto** envía JPEG, PNG o WebP al backend, extrae una propuesta con MiniMax y recién crea el viaje cuando el operador revisa y confirma. La imagen queda privada: se entrega únicamente por el endpoint autenticado, nunca como archivo estático. El OCR puede informar chofer y patente observados, pero el registro usa el usuario autenticado y la patente/unidad configuradas en el celular. El remito del proveedor queda vacío; el remito FGPY se conserva completo. Para este trayecto se guarda `pesaje_unico=true`, origen en cero, destino en toneladas y `cliente_id=NULL`.
+El flujo **Cargar desde foto** envía JPEG, PNG o WebP al backend, extrae una propuesta con MiniMax y recién crea el viaje cuando el operador revisa y confirma. La imagen queda privada: se entrega únicamente por el endpoint autenticado, nunca como archivo estático. El OCR puede informar chofer y patente observados, pero el registro usa el usuario autenticado y la patente/unidad configuradas en el celular. El destinatario se propone como cliente y el remitente como proveedor; ambos deben seleccionarse desde sus catálogos activos antes de confirmar. El remito del proveedor queda vacío; el remito FGPY se conserva completo. Para este trayecto se guarda `pesaje_unico=true`, origen en cero y destino en toneladas.
 
 Instalar `uv` (incluye `uvx`) y verificar que lo vea el mismo usuario del servicio:
 
@@ -296,6 +296,16 @@ npm run verify
 ```
 
 Un timeout de MiniMax devuelve un error controlado y no crea ningún viaje. Para diagnosticarlo, verificar primero `uvx --version`, que `MINIMAX_API_HOST` corresponda a la región de la clave, la conectividad saliente y luego ajustar `MINIMAX_VISION_TIMEOUT_SECONDS`. No iniciar el servidor MCP manualmente en producción ni registrar la clave o la salida cruda del proveedor en logs o tickets.
+
+Para verificar el documento de referencia sin escribir en producción:
+
+1. usar una base local o de staging con Alcogreen como cliente activo y Forestal Paraguay como proveedor activo;
+2. cargar la imagen mediante **Cargar desde foto**;
+3. detenerse en **Revisá los datos detectados**, sin pulsar **Confirmar y guardar**;
+4. comprobar remito `002-003-0003755`, cliente Alcogreen, proveedor Forestal Paraguay y pesos `48.250 / 16.460 / 31.790 TN`;
+5. comprobar que al vaciar cliente o proveedor la confirmación no se envía.
+
+La lectura de referencia no debe consultar ni escribir una base de producción.
 
 ## Frontend
 
