@@ -32,9 +32,41 @@ class TripImageModelMetadataTest(unittest.TestCase):
         self.assertIn("pesaje_unico", tablero.columns)
         self.assertTrue(tablero.columns.cliente_id.nullable)
 
+        unique_constraints = {
+            constraint.name: tuple(column.name for column in constraint.columns)
+            for constraint in tablero.constraints
+            if constraint.__class__.__name__ == "UniqueConstraint"
+        }
+        self.assertEqual(
+            unique_constraints.get("uq_tablero_produccion_remito_proveedor"),
+            ("remito_proveedor",),
+        )
+        self.assertEqual(
+            unique_constraints.get("uq_tablero_produccion_remito_fgpy"),
+            ("remito_fgpy",),
+        )
+
         evidencia = self.models.ViajeImagen.__table__
         self.assertTrue(evidencia.columns.token_hash.unique)
         self.assertIn("expires_at", evidencia.columns)
+
+    def test_migracion_de_remitos_frena_si_hay_duplicados_y_crea_indices_unicos(self):
+        migration = (
+            Path(__file__).resolve().parent
+            / "migrations"
+            / "20260720_prevent_duplicate_trip_remitos.sql"
+        ).read_text(encoding="utf-8")
+
+        preflight = "HAVING COUNT(*) > 1"
+        signal = "SIGNAL SQLSTATE '45000'"
+        normalize_empty = "NULLIF(TRIM(remito_proveedor), '')"
+        provider_index = "ADD UNIQUE INDEX uq_tablero_produccion_remito_proveedor"
+        fgpy_index = "ADD UNIQUE INDEX uq_tablero_produccion_remito_fgpy"
+
+        for required in (preflight, signal, normalize_empty, provider_index, fgpy_index):
+            self.assertIn(required, migration)
+        self.assertLess(migration.index(preflight), migration.index(provider_index))
+        self.assertLess(migration.index(preflight), migration.index(fgpy_index))
 
     def test_migracion_repara_indices_con_definicion_exacta(self):
         migration = (
@@ -232,6 +264,17 @@ class CreateTripServiceTest(unittest.TestCase):
         self.assertEqual(row.usuario, "10")
         self.assert_bad_request(numero_remision="R-1", numero_remision_fpv="F-9")
         self.assert_bad_request(numero_remision="R-9", numero_remision_fpv="F-1")
+
+    def test_constraint_de_base_impide_la_carrera_de_dos_remitos_iguales(self):
+        self.create_trip(self.payload())
+
+        with patch("trip_service._validate_remitos", return_value=None):
+            with self.assertRaises(HTTPException) as caught:
+                self.create_trip(self.payload())
+
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertIn("remito", caught.exception.detail.lower())
+        self.assertEqual(self.db.query(self.models.TableroProduccion).count(), 1)
 
     def test_cliente_default_debe_exist_y_estar_activo(self):
         row = self.create_trip(self.payload(cliente_id=None))

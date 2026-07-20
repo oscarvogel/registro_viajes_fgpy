@@ -3,7 +3,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import HTTPException
 from sqlalchemy import func
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import models
@@ -36,9 +36,19 @@ def _validate_remitos(db, registro):
         (registro.numero_remision, models.TableroProduccion.remito_proveedor, "El Nº Remito Proveedor ya existe"),
         (registro.numero_remision_fpv, models.TableroProduccion.remito_fgpy, "El Nº Remito FGPY ya existe"),
     )
-    for value, column, message in checks:
+    for raw_value, column, message in checks:
+        value = (raw_value or "").strip() or None
         if value and db.query(models.TableroProduccion.id).filter(column == value).first():
             raise HTTPException(status_code=400, detail=message)
+
+
+def _duplicate_remito_message(error):
+    message = str(getattr(error, "orig", error)).lower()
+    if "uq_tablero_produccion_remito_proveedor" in message or "tablero_produccion.remito_proveedor" in message:
+        return "El Nº Remito Proveedor ya existe"
+    if "uq_tablero_produccion_remito_fgpy" in message or "tablero_produccion.remito_fgpy" in message:
+        return "El Nº Remito FGPY ya existe"
+    return None
 
 
 def _effective_employee(db, effective_user):
@@ -146,10 +156,12 @@ def _weights(registro):
 
 def _build_record(registro, employee, equipo, proveedor_id, cliente_id, weights):
     neto_origen, bruto, tara, neto_destino, produccion = weights
+    remito_proveedor = (registro.numero_remision or "").strip() or None
+    remito_fgpy = (registro.numero_remision_fpv or "").strip() or None
     return models.TableroProduccion(
         fecha=registro.fecha_remision, empleado_id=employee.id, equipo_id=equipo.id,
         produccion=produccion, remito=0, remito2=0,
-        remito_proveedor=registro.numero_remision, remito_fgpy=registro.numero_remision_fpv,
+        remito_proveedor=remito_proveedor, remito_fgpy=remito_fgpy,
         hora=datetime.now().time(), turno="dia", unidad_negocio_id=registro.unidad_negocio_id,
         cliente_id=cliente_id, predio_id=1,
         periodo=f"{registro.fecha_remision.year}{registro.fecha_remision.month:02d}",
@@ -182,6 +194,12 @@ def create_trip(db: Session, registro, effective_user, commit=True):
             db.commit()
             db.refresh(record)
         return record
+    except IntegrityError as exc:
+        duplicate_message = _duplicate_remito_message(exc)
+        db.rollback()
+        if duplicate_message:
+            raise HTTPException(status_code=400, detail=duplicate_message) from exc
+        raise
     except SQLAlchemyError:
         if commit:
             db.rollback()

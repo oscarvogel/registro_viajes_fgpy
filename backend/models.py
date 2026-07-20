@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Date, Float, Text, Time, DECIMAL, DateTime
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Date, Float, Text, Time, DECIMAL, DateTime, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -85,6 +85,16 @@ class Paniol(Base):
 
 class TableroProduccion(Base):
     __tablename__ = "tablero_produccion"
+    __table_args__ = (
+        UniqueConstraint(
+            "remito_proveedor",
+            name="uq_tablero_produccion_remito_proveedor",
+        ),
+        UniqueConstraint(
+            "remito_fgpy",
+            name="uq_tablero_produccion_remito_fgpy",
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     fecha = Column(Date, nullable=False)
