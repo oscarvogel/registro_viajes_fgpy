@@ -399,8 +399,8 @@ class MiniMaxVisionClientTests(unittest.TestCase):
 
     @staticmethod
     def _protocol_messages():
-        from backend.minimax_vision import _messages
-        return _messages(Path("image.jpg"))
+        from backend.minimax_vision import _messages, PROMPT
+        return _messages(Path("image.jpg"), PROMPT)
 
     @staticmethod
     def _fake_mcp_argv(mode):

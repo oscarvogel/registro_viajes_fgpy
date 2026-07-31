@@ -1,6 +1,6 @@
 ﻿from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import Query, UploadFile, File
+from fastapi import Query, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.exceptions import RequestValidationError
@@ -28,11 +28,13 @@ from sentry_sdk.integrations.fastapi import FastApiIntegration
 import models, schemas, database
 from trip_service import create_trip
 from trip_image_service import TripImageService
+from fuel_image_service import FuelImageService
 from image_storage import (ImageStorage, ImageStorageError, ImageStorageConfigError,
                            ImageValidationError, ImageTokenError, ImageTokenExpiredError, ImageStoragePathError)
 from minimax_vision import (MiniMaxVisionClient, MiniMaxVisionError,
                             MiniMaxVisionConfigurationError, MiniMaxVisionTimeoutError)
 from trip_image_normalization import ExtractionValidationError
+from fuel_image_normalization import FuelExtractionValidationError
 from logger import app_logger, log_api_request, log_user_action, log_system_event, sanitize_for_logging, set_request_context, clear_request_context
 # Initialize Sentry as early as possible
 
@@ -662,6 +664,28 @@ def analyze_trip_image_in_worker(data, original_name, mime_type, storage, sessio
         db.close()
 
 
+def get_fuel_image_storage():
+    return ImageStorage()
+
+
+def get_fuel_image_vision():
+    return MiniMaxVisionClient()
+
+
+def get_fuel_image_service(db: Session):
+    return FuelImageService(db, get_fuel_image_storage(), get_fuel_image_vision(), session_factory=database.SessionLocal)
+
+
+def analyze_fuel_image_in_worker(data, original_name, mime_type, tipo, storage, session_factory=None):
+    factory = session_factory or database.SessionLocal
+    db = factory()
+    try:
+        service = FuelImageService(db, storage, get_fuel_image_vision(), session_factory=factory)
+        return service.analyze(data, original_name, mime_type, tipo)
+    finally:
+        db.close()
+
+
 @api_router.post("/registro-viaje", response_model=schemas.RegistroViajeResponse)
 def create_registro_viaje(
     registro: schemas.RegistroViajeCreate,
@@ -730,6 +754,126 @@ def get_trip_image(image_id: int, db: Session = Depends(get_db), current_user: m
             raise HTTPException(410, "Imagen vencida")
         try:
             path = get_trip_image_storage().resolve_confirmed(image.storage_path)
+        except ImageStorageConfigError:
+            raise HTTPException(503, "Servicio de imagen no disponible")
+        except (ImageValidationError, ImageStoragePathError, OSError):
+            raise HTTPException(404, "Imagen no disponible")
+        response = FileResponse(path, media_type=image.mime_type, filename=image.original_name)
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
+    finally:
+        clear_request_context()
+
+
+# --- Carga de combustible desde imagen (OCR) ---
+
+
+@api_router.post("/fuel-image/analyze", response_model=schemas.FuelImageAnalysisResponse)
+async def analyze_fuel_image(
+    file: UploadFile = File(...),
+    tipo: str = Form(...),
+    current_user: models.Empleado = Depends(get_current_user),
+):
+    try:
+        try:
+            tipo_enum = schemas.FuelTipoComprobante(tipo)
+        except ValueError:
+            raise HTTPException(400, f"Tipo de comprobante invalido: {tipo}")
+        storage = get_fuel_image_storage()
+        data = await file.read(storage.max_bytes + 1)
+        if len(data) > storage.max_bytes:
+            raise HTTPException(413, "La imagen excede el limite permitido")
+        return await run_in_threadpool(
+            analyze_fuel_image_in_worker,
+            data,
+            file.filename or "image",
+            file.content_type or "",
+            tipo_enum,
+            storage,
+        )
+    except ImageStorageConfigError:
+        raise HTTPException(503, "Servicio de imagen no disponible")
+    except (ImageValidationError, ImageStoragePathError) as exc:
+        raise HTTPException(400, str(exc))
+    except FuelExtractionValidationError as exc:
+        raise HTTPException(422, str(exc))
+    except MiniMaxVisionConfigurationError:
+        raise HTTPException(503, "Servicio de analisis no disponible")
+    except MiniMaxVisionTimeoutError:
+        raise HTTPException(504, "El analisis excedio el tiempo limite")
+    except MiniMaxVisionError:
+        raise HTTPException(502, "No se pudo analizar la imagen")
+    finally:
+        clear_request_context()
+
+
+@api_router.post("/fuel-image/confirm/ticket", response_model=schemas.FuelImageConfirmResponse)
+def confirm_fuel_image_ticket(
+    request: schemas.FuelTicketConfirmRequest,
+    db: Session = Depends(get_db),
+    current_user: models.Empleado = Depends(get_current_user),
+):
+    try:
+        return get_fuel_image_service(db).confirm_ticket(request, current_user)
+    except ImageTokenExpiredError:
+        raise HTTPException(410, "Token de imagen vencido")
+    except ImageTokenError:
+        raise HTTPException(400, "Token de imagen invalido")
+    except ImageStorageConfigError:
+        raise HTTPException(503, "Servicio de imagen no disponible")
+    except (ImageValidationError, ImageStoragePathError):
+        raise HTTPException(400, "La imagen temporal no esta disponible")
+    finally:
+        clear_request_context()
+
+
+@api_router.post("/fuel-image/confirm/remito-interno", response_model=schemas.FuelImageConfirmResponse)
+def confirm_fuel_image_remito_interno(
+    request: schemas.FuelRemitoInternoConfirmRequest,
+    db: Session = Depends(get_db),
+    current_user: models.Empleado = Depends(get_current_user),
+):
+    try:
+        return get_fuel_image_service(db).confirm_remito_interno(request, current_user)
+    except ImageTokenExpiredError:
+        raise HTTPException(410, "Token de imagen vencido")
+    except ImageTokenError:
+        raise HTTPException(400, "Token de imagen invalido")
+    except ImageStorageConfigError:
+        raise HTTPException(503, "Servicio de imagen no disponible")
+    except (ImageValidationError, ImageStoragePathError):
+        raise HTTPException(400, "La imagen temporal no esta disponible")
+    finally:
+        clear_request_context()
+
+
+@api_router.get("/fuel-image/{image_id}/blob")
+def get_fuel_image(
+    image_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.Empleado = Depends(get_current_user),
+):
+    try:
+        image = (
+            db.query(models.CombustibleImagen)
+            .filter(models.CombustibleImagen.id == image_id)
+            .first()
+        )
+        if not image:
+            raise HTTPException(404, "Imagen no encontrada")
+        if image.movimiento is None:
+            raise HTTPException(404, "Movimiento asociado no encontrado")
+        if image.movimiento.usuario != str(current_user.id) and current_user.id not in parse_admin_user_ids():
+            raise HTTPException(403, "No autorizado")
+        expires = (
+            image.expires_at.replace(tzinfo=timezone.utc)
+            if image.expires_at.tzinfo is None
+            else image.expires_at
+        )
+        if datetime.now(timezone.utc) >= expires:
+            raise HTTPException(410, "Imagen vencida")
+        try:
+            path = get_fuel_image_storage().resolve_confirmed(image.storage_path)
         except ImageStorageConfigError:
             raise HTTPException(503, "Servicio de imagen no disponible")
         except (ImageValidationError, ImageStoragePathError, OSError):

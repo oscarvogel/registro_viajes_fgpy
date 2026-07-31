@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -25,6 +26,24 @@ class MiniMaxVisionConfigurationError(MiniMaxVisionError):
 
 class MiniMaxVisionTimeoutError(MiniMaxVisionError):
     """The provider execution exceeded its configured deadline."""
+
+
+@dataclass(frozen=True)
+class VisionSchema:
+    """Esquema parametrizable para validar la respuesta JSON de MiniMax.
+
+    - ``required``: conjunto exacto de claves que el JSON debe tener.
+    - ``text_fields``: claves que deben ser string o null.
+    - ``weight_fields``: claves numericas (Decimal-compatible); default vacio.
+    """
+
+    required: frozenset
+    text_fields: frozenset
+    weight_fields: frozenset = frozenset()
+
+    @property
+    def confidence_fields(self) -> frozenset:
+        return self.text_fields | self.weight_fields
 
 
 PROMPT = """Analiza la imagen para precargar un viaje. Devuelve EXCLUSIVAMENTE un unico objeto JSON,
@@ -47,17 +66,122 @@ ni reinterpretarlo: si el ticket muestra 49.690,00 kg devuelve "49.690,00", nunc
 OCR no elige cliente, proveedor, chofer, patente ni unidad: solo informa texto observado.
 No normalices datos de negocio ni inventes valores."""
 
-_REQUIRED = {
-    "fecha_remision", "fecha_remito", "fecha_ticket", "remito_tipo", "remito_sucursal", "remito_numero",
-    "cliente_candidato", "proveedor_candidato", "peso_bruto", "tara", "neto", "unidad_peso",
-    "patente_observada", "chofer_observado", "confidence", "warnings",
-}
-_TEXT_FIELDS = {
-    "fecha_remision", "fecha_remito", "fecha_ticket", "remito_tipo", "remito_sucursal", "remito_numero",
-    "cliente_candidato", "proveedor_candidato", "unidad_peso", "patente_observada", "chofer_observado",
-}
-_WEIGHT_FIELDS = {"peso_bruto", "tara", "neto"}
-_CONFIDENCE_FIELDS = _TEXT_FIELDS | _WEIGHT_FIELDS
+FUEL_TICKET_PROMPT = """Analiza la imagen de un ticket de carga de combustible de estacion de servicio.
+Devuelve EXCLUSIVAMENTE un unico objeto JSON, sin prosa ni markdown, con estas claves exactas:
+fecha; hora; litros; km_hora; remito; ruc_emisor; razon_social_emisor; producto;
+nro_tarjeta; confidence (objeto por campo, solo para las claves de datos anteriores y con valores
+entre 0 y 1); warnings (array de textos).
+Usa null cuando un dato no sea visible. Lee SOLO lo que esta impreso en la imagen; no inventes.
+
+Para fecha usa la impresa en el ticket (DD/MM/YYYY). Si viene como DD/MM/YY (dos digitos para el
+anio), completa el siglo asumiendo 20YY.
+Para hora usa HH:MM:SS o HH:MM tal como aparezca; si no se ve, null.
+Para litros toma el valor del campo Cantidad (o Cantidad 1) impreso en el ticket. Copia los
+digitos y separadores tal cual aparecen; no conviertas unidades.
+Para km_hora toma el valor del campo "Km. del vehiculo" o "Km del vehiculo" del ticket; es el
+odometro del camion, normalmente de 4 a 6 digitos sin decimales.
+Para remito toma el numero del campo "Comprobante Nro" o "BOLETA" del ticket. En el sistema
+paraguayo INFONET suele ser de 7 digitos; copia solo digitos.
+Para ruc_emisor copia el RUC de la estacion tal como aparece (formato paraguayo XXXXXXXX-Y o
+XXXXXXXX/Y). Si no se distingue, null.
+Para razon_social_emisor copia la razon social visible (PETROBRAS, LIDER EXPRESS, etc.).
+Para producto copia el nombre del combustible tal cual (DIESEL EURO 5 S-50, NAFTA GRID, etc.).
+Para nro_tarjeta copia el numero de tarjeta de flota; si esta enmascarado como *********0334,
+copia solo los ultimos 4 digitos en un string aparte o el valor completo si esta visible.
+
+confidence por campo entre 0 y 1 segun cuan legible este cada dato (1 = cristalino, 0 = ilegible).
+warnings: array de strings cortos describiendo problemas (ej. "imagen borrosa", "ticket cortado",
+"sin RUC visible")."""
+
+FUEL_REMITO_INTERNO_PROMPT = """Analiza la imagen de un remito interno manuscrito de combustible.
+Devuelve EXCLUSIVAMENTE un unico objeto JSON, sin prosa ni markdown, con estas claves exactas:
+fecha; hora; litros; kilometros; remito; lugar_carga; patente_observada; firmante; contacto;
+tipo; confidence (objeto por campo, solo para las claves de datos anteriores y con valores entre
+0 y 1); warnings (array de textos).
+Usa null cuando un dato no sea visible. Los campos manuscritos son los mas ruidosos: leelos
+caritativo y refleja baja confianza (0.3-0.6) cuando la letra no sea clara.
+
+Para fecha toma la del campo Fecha del remito (formato DD/MM/YY o DD/MM/YYYY).
+Para hora toma la del campo Hora (HH:MM si aparece, si no null).
+Para litros toma el valor del campo Litros manuscrito. Acepta enteros o decimales con punto
+o coma como separador.
+Para kilometros toma el valor del campo Kilometros manuscrito. Es la distancia recorrida o el
+odometro, no asumas cual: refleja lo que diga el papel.
+Para remito toma el numero del campo "N" o "No" del remito (6 digitos tipicamente).
+Para lugar_carga transcribe el lugar escrito a mano (mejor esfuerzo, refleja confianza baja si
+no se lee).
+Para patente_observada transcribe la patente escrita a mano (formato ABC123).
+Para firmante transcribe el nombre del firmante ("Recib Conforme" / "Aclaracion").
+Para contacto copia el email o telefono si aparecen en el membrete.
+Para tipo copia el valor del campo TIPO (ej. "INTERNO/GASOIL", "INTERNO/NAFTA"); refleja solo
+lo que diga el papel.
+
+confidence por campo entre 0 y 1. Para campos manuscritos usa 0.3-0.6 cuando la letra sea
+regular, 0.1-0.3 cuando sea ilegible. Para campos impresos del membrete 0.8-1.0.
+warnings: array de strings describiendo problemas (ej. "letra ilegible en lugar_carga", "foto
+inclinada", "falta el campo Hora")."""
+
+
+def _trip_schema() -> VisionSchema:
+    required = {
+        "fecha_remision", "fecha_remito", "fecha_ticket",
+        "remito_tipo", "remito_sucursal", "remito_numero",
+        "cliente_candidato", "proveedor_candidato",
+        "peso_bruto", "tara", "neto", "unidad_peso",
+        "patente_observada", "chofer_observado",
+        "confidence", "warnings",
+    }
+    text_fields = {
+        "fecha_remision", "fecha_remito", "fecha_ticket",
+        "remito_tipo", "remito_sucursal", "remito_numero",
+        "cliente_candidato", "proveedor_candidato",
+        "unidad_peso", "patente_observada", "chofer_observado",
+    }
+    weight_fields = {"peso_bruto", "tara", "neto"}
+    return VisionSchema(
+        required=frozenset(required),
+        text_fields=frozenset(text_fields),
+        weight_fields=frozenset(weight_fields),
+    )
+
+
+def _fuel_ticket_schema() -> VisionSchema:
+    required = {
+        "fecha", "hora", "litros", "km_hora", "remito",
+        "ruc_emisor", "razon_social_emisor", "producto",
+        "nro_tarjeta", "confidence", "warnings",
+    }
+    text_fields = {
+        "fecha", "hora", "litros", "km_hora", "remito",
+        "ruc_emisor", "razon_social_emisor", "producto",
+        "nro_tarjeta",
+    }
+    return VisionSchema(
+        required=frozenset(required),
+        text_fields=frozenset(text_fields),
+    )
+
+
+def _fuel_remito_schema() -> VisionSchema:
+    required = {
+        "fecha", "hora", "litros", "kilometros", "remito",
+        "lugar_carga", "patente_observada", "firmante", "contacto",
+        "tipo", "confidence", "warnings",
+    }
+    text_fields = {
+        "fecha", "hora", "litros", "kilometros", "remito",
+        "lugar_carga", "patente_observada", "firmante", "contacto",
+        "tipo",
+    }
+    return VisionSchema(
+        required=frozenset(required),
+        text_fields=frozenset(text_fields),
+    )
+
+
+TRIP_SCHEMA = _trip_schema()
+FUEL_TICKET_SCHEMA = _fuel_ticket_schema()
+FUEL_REMITO_SCHEMA = _fuel_remito_schema()
 
 
 def _argv(command: str | list[str]) -> list[str]:
@@ -89,7 +213,7 @@ def _argv(command: str | list[str]) -> list[str]:
     return result
 
 
-def _messages(image: Path) -> list[dict[str, Any]]:
+def _messages(image: Path, prompt: str) -> list[dict[str, Any]]:
     return [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2025-03-26", "capabilities": {},
@@ -269,7 +393,14 @@ class MiniMaxVisionClient:
     def __repr__(self):
         return f"{type(self).__name__}(configured={bool(self._api_key or os.getenv('MINIMAX_API_KEY'))})"
 
-    def analyze(self, image_path: Path) -> dict[str, Any]:
+    def analyze(
+        self,
+        image_path: Path,
+        prompt: str | None = None,
+        schema: VisionSchema | None = None,
+    ) -> dict[str, Any]:
+        used_prompt = prompt if prompt is not None else PROMPT
+        used_schema = schema if schema is not None else TRIP_SCHEMA
         key = self._api_key or os.getenv("MINIMAX_API_KEY")
         if not key:
             raise MiniMaxVisionConfigurationError("MINIMAX_API_KEY no esta configurada")
@@ -290,7 +421,7 @@ class MiniMaxVisionClient:
             env["MINIMAX_API_KEY"] = key
             env["MINIMAX_API_HOST"] = os.getenv("MINIMAX_API_HOST") or "https://api.minimax.io"
             response = self._executor(
-                argv=argv, messages=_messages(Path(image_path)), env=env,
+                argv=argv, messages=_messages(Path(image_path), used_prompt), env=env,
                 timeout_seconds=timeout, max_output_bytes=maximum,
             )
         except MiniMaxVisionError:
@@ -306,10 +437,10 @@ class MiniMaxVisionClient:
             if timed_out:
                 raise MiniMaxVisionTimeoutError(failure)
             raise MiniMaxVisionError(failure)
-        return _parse_response(response)
+        return _parse_response(response, used_schema)
 
 
-def _parse_response(response: Any) -> dict[str, Any]:
+def _parse_response(response: Any, schema: VisionSchema) -> dict[str, Any]:
     parsed = None
     try:
         if not isinstance(response, dict) or "error" in response:
@@ -330,8 +461,8 @@ def _parse_response(response: Any) -> dict[str, Any]:
         value = json.loads(text, parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()))
         if not isinstance(value, dict):
             raise ValueError
-        _validate(value)
-        parsed = {key: value[key] for key in _REQUIRED}
+        _validate(value, schema)
+        parsed = {key: value[key] for key in schema.required}
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         pass
     if parsed is None:
@@ -339,10 +470,10 @@ def _parse_response(response: Any) -> dict[str, Any]:
     return parsed
 
 
-def _validate(value: dict[str, Any]) -> None:
-    if set(value) != _REQUIRED:
+def _validate(value: dict[str, Any], schema: VisionSchema) -> None:
+    if set(value) != set(schema.required):
         raise ValueError
-    if any(value[key] is not None and not isinstance(value[key], str) for key in _TEXT_FIELDS):
+    if any(value[key] is not None and not isinstance(value[key], str) for key in schema.text_fields):
         raise TypeError
     if any(
         value[key] is not None and (
@@ -354,11 +485,12 @@ def _validate(value: dict[str, Any]) -> None:
                 "infinity", "+infinity", "-infinity",
             })
         )
-        for key in _WEIGHT_FIELDS
+        for key in schema.weight_fields
     ):
         raise TypeError
+    confidence_fields = schema.confidence_fields
     if not isinstance(value["confidence"], dict) or not all(
-        key in _CONFIDENCE_FIELDS
+        key in confidence_fields
         and score is not None
         and not isinstance(score, bool)
         and isinstance(score, (int, float))
