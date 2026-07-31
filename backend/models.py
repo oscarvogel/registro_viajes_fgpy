@@ -4,6 +4,45 @@ from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Date, Float
 from sqlalchemy.orm import relationship
 from database import Base
 
+
+# Convencion del proyecto: existe un proveedor "INTERNO FORESTAL PARAGUAY"
+# en la tabla `proveedor`, creado por la migracion
+# 20260731_add_combustible_imagenes.sql. Su id lo asigna la DB; el backend
+# lo resuelve por nombre (case-insensitive) con get_internal_provider_id(db)
+# en vez de hardcodear el id. Esto evita pisar el id=1 historico
+# (PROVEEDOR GENERICO, presente en 815 movimientos de combustible previos)
+# y mantiene trazabilidad.
+INTERNAL_PROVIDER_RAZON_SOCIAL = "INTERNO FORESTAL PARAGUAY"
+
+
+def get_internal_provider_id(db) -> int:
+    """Devuelve el id del proveedor INTERNO FORESTAL PARAGUAY.
+
+    - Lo busca por nombre (case-insensitive, contiene 'INTERNO').
+    - Falla con RuntimeError explicito si no existe o si hay mas de uno.
+    - El id no se hardcodea: depende de lo que la DB asigne al insertar
+      el registro en la primera corrida de la migracion.
+    """
+    matches = (
+        db.query(Proveedor)
+        .filter(Proveedor.razon_social.ilike("%INTERNO%"))
+        .all()
+    )
+    if not matches:
+        raise RuntimeError(
+            "Proveedor INTERNO FORESTAL PARAGUAY no encontrado. "
+            "Ejecutar la migracion 20260731_add_combustible_imagenes.sql "
+            "para crearlo. Ver issue #16."
+        )
+    if len(matches) > 1:
+        ids = [m.id for m in matches]
+        raise RuntimeError(
+            f"Multiples proveedores con 'INTERNO' en la razon social: {ids}. "
+            "Resolver manualmente antes de continuar."
+        )
+    return matches[0].id
+
+
 class Empleado(Base):
     __tablename__ = "empleados"
 
@@ -209,6 +248,23 @@ class MovimientoCombustible(Base):
     equipo = relationship("Equipo")
     paniol = relationship("Paniol")
     proveedor = relationship("Proveedor")
+    imagenes = relationship("CombustibleImagen", back_populates="movimiento")
+
+
+class CombustibleImagen(Base):
+    __tablename__ = "combustible_imagenes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    movimiento_id = Column(Integer, ForeignKey("movimientocombustible.id"), nullable=False, index=True)
+    storage_path = Column(String(500), nullable=False)
+    original_name = Column(String(255), nullable=False)
+    mime_type = Column(String(100), nullable=False)
+    sha256 = Column(String(64), nullable=False, index=True)
+    token_hash = Column(String(64), nullable=False, unique=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False, index=True)
+
+    movimiento = relationship("MovimientoCombustible", back_populates="imagenes")
 
 
 class ClientLogSummary(Base):
