@@ -144,19 +144,14 @@ class FuelImageService:
             prompt = FUEL_REMITO_INTERNO_PROMPT
             schema = FUEL_REMITO_SCHEMA
         temporary = self.storage.save_temp(data, original_name, mime_type)
-        try:
-            raw = self.vision.analyze(
-                self.storage.resolve_temp(temporary.token).path,
-                prompt=prompt,
-                schema=schema,
-            )
-        except MiniMaxVisionError:
-            # El error ya es seguro para el caller; limpiamos el temp.
-            try:
-                self.storage.cleanup_temp_for_token(temporary.token)
-            except Exception:
-                pass
-            raise
+        # Si MiniMax falla, el temporal queda para el cleanup diario
+        # (mismo comportamiento que trip_image_service). No rompemos el
+        # flujo por un error de OCR; el operador puede reintentar.
+        raw = self.vision.analyze(
+            self.storage.resolve_temp(temporary.token).path,
+            prompt=prompt,
+            schema=schema,
+        )
 
         warnings = list(raw.get("warnings", []))
 
