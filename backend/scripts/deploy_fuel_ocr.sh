@@ -299,14 +299,21 @@ else
   exit 1
 fi
 
-if grep -q "fuel-image|/api|/api)(/.*)?\\\$" "$NGINX_SITE" || grep -E "fuel-image\|api" "$NGINX_SITE" >/dev/null; then
+# Backup del nginx antes de tocar
+sudo cp "$NGINX_SITE" "${NGINX_SITE}.bak.$(date +%s)" 2>/dev/null || log_warn "No se pudo hacer backup del nginx"
+
+# Verificar si fuel-image ya esta en la lista. La forma correcta es
+# que aparezca como "|fuel-image|" (entre pipes) en la lista de alternativas.
+if grep -E '\|fuel-image\|' "$NGINX_SITE" >/dev/null; then
   log_ok "fuel-image ya esta en la lista del proxy_pass"
 else
   log_warn "fuel-image NO esta en la lista. Aplicando cambio..."
-  # Reemplaza la regex, agregando |fuel-image| antes de |api
-  # La regex evita capturar el `^` (anchor) y la apertura `(`, asi el
-  # reemplazo es solo el grupo de alternativas + el grupo del final.
-  sudo sed -i -E 's|(\([^)]+\|api\))(\(/.*\)\?\$)|\1fuel-image\2|' "$NGINX_SITE"
+  # Reemplazo LITERAL (no regex): "|api)(/.*)?$" -> "|api|fuel-image)(/.*)?$"
+  # Usamos # como delimitador de sed para no chocar con | ni con ()
+  # ni con ?. Esto agrega |fuel-image| justo antes del ) de cierre del grupo.
+  # NO usamos regex compleja porque el 2026-07-31 nos quemo: el
+  # (\([^)]+\|api\)) capturaba hasta el ) y el reemplazo perdia el |.
+  sudo sed -i 's#|api)(/.\*)?\$#|api|fuel-image)(/.*)?\$#' "$NGINX_SITE"
   log_ok "Regex actualizada"
 fi
 
@@ -315,11 +322,11 @@ echo "   --- location actualizado ---"
 grep -A 6 "^    location ~" "$NGINX_SITE" | head -10
 echo "   ---"
 
-# Validar config
+# Validar config SIEMPRE antes de recargar. Si falla, revertir manualmente
+# con el backup que dejamos.
 log_step "Validar config de nginx"
 if ! sudo nginx -t; then
-  log_err "Config de nginx invalida. Revirtiendo..."
-  # No revertimos automaticamente; el usuario decide
+  log_err "Config de nginx invalida. Restaurar backup: sudo cp ${NGINX_SITE}.bak.<timestamp> $NGINX_SITE"
   exit 1
 fi
 log_ok "Config valida"
