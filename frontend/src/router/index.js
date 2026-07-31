@@ -6,6 +6,7 @@ import Dashboard from '../views/Dashboard.vue'
 import History from '../views/History.vue'
 import Settings from '../views/Settings.vue'
 import FuelLoad from '../views/FuelLoad.vue'
+import FuelImageUpload from '../views/FuelImageUpload.vue'
 import CarretonMove from '../views/CarretonMove.vue'
 import AdminClientLogs from '../views/AdminClientLogs.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
@@ -19,6 +20,7 @@ const routes = [
   { path: '/new-trip/image', component: TripImageUpload, meta: { requiresAuth: true } },
   { path: '/history', component: History, meta: { requiresAuth: true } },
   { path: '/fuel-load', component: FuelLoad, meta: { requiresAuth: true } },
+  { path: '/fuel-load/image', component: FuelImageUpload, meta: { requiresAuth: true } },
   { path: '/carreton-move', component: CarretonMove, meta: { requiresAuth: true } },
   { path: '/settings', component: Settings, meta: { requiresAuth: true } },
   { path: '/admin/dashboard', component: AdminDashboard, meta: { requiresAuth: true, requiresAdmin: true } },

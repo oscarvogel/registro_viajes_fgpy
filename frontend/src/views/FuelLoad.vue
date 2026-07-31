@@ -1,13 +1,20 @@
 <script setup>
 import { ref, onMounted, computed } from 'vue';
 import axios from 'axios';
+import { useRouter } from 'vue-router';
 import Swal from 'sweetalert2';
 import { useCatalogStore } from '../stores/catalog';
 import { API_URL } from '../config';
 import Autocomplete from '../components/Autocomplete.vue';
 import { buildFuelLastKmParams, buildFuelPayload, getLastFuelKmHora, getStoredUserId } from '../services/criticalScreens';
+import { FUEL_TIPO_REMITO_INTERNO, FUEL_TIPO_TICKET } from '../services/fuelImage';
 
 const catalog = useCatalogStore();
+const router = useRouter();
+
+const openFuelImage = (tipo) => {
+  router.push({ path: '/fuel-load/image', query: { tipo } });
+};
 
 const form = ref({
   fecha_carga: new Date().toISOString().split('T')[0],
@@ -168,6 +175,36 @@ const submitForm = async () => {
       <div class="text-xs px-2 py-1 rounded bg-green-100 text-green-800" v-if="!catalog.isOffline">Conectado</div>
       <div class="text-xs px-2 py-1 rounded bg-orange-100 text-orange-800" v-else>Offline</div>
     </header>
+
+    <section class="bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/40 dark:to-orange-950/40 p-4 rounded-xl shadow-sm mb-6 border border-amber-200 dark:border-amber-800/60">
+      <div class="flex items-start gap-3">
+        <div class="shrink-0 rounded-full bg-amber-600 p-2 text-white" aria-hidden="true">
+          <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h1l2-3h8l2 3h1a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9zm9 8a4 4 0 100-8 4 4 0 000 8z" />
+          </svg>
+        </div>
+        <div class="min-w-0 flex-1">
+          <h2 class="text-lg font-semibold text-amber-950 dark:text-amber-100">Cargar desde foto</h2>
+          <p class="mt-1 text-sm text-amber-800 dark:text-amber-200">Ticket INFONET o remito interno</p>
+          <div class="mt-4 space-y-3">
+            <button
+              type="button"
+              @click="openFuelImage(FUEL_TIPO_TICKET)"
+              class="min-h-11 w-full rounded-lg bg-amber-600 px-4 py-2 font-medium text-white shadow hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
+            >
+              📷 Cargar ticket de estación
+            </button>
+            <button
+              type="button"
+              @click="openFuelImage(FUEL_TIPO_REMITO_INTERNO)"
+              class="min-h-11 w-full rounded-lg bg-amber-600 px-4 py-2 font-medium text-white shadow hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
+            >
+              📋 Cargar remito interno
+            </button>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <form @submit.prevent="submitForm" class="space-y-4">
       <div>
