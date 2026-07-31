@@ -267,28 +267,19 @@ if [[ ! -d "$FRONTEND_DIR/dist" ]]; then
   log_err "Build del frontend fallo, no se genero dist/"
   exit 1
 fi
-# Sincronizar dist/ con la raiz de frontend/ (donde nginx sirve). Usamos
-# --delete para limpiar assets viejos, pero excluimos los archivos fuente
-# Vite que tambien viven en frontend/ (src/, package.json, etc).
-log_info "Sincronizando dist/ con $FRONTEND_DIR/ ..."
-sudo rsync -a --delete \
-  --exclude='src/' \
-  --exclude='node_modules/' \
-  --exclude='package.json' \
-  --exclude='package-lock.json' \
-  --exclude='vite.config.js' \
-  --exclude='tailwind.config.js' \
-  --exclude='postcss.config.js' \
-  --exclude='tests/' \
-  --exclude='scripts/' \
-  --exclude='.env*' \
-  --exclude='public/' \
-  --exclude='dist/' \
-  "$FRONTEND_DIR/dist/" "$FRONTEND_DIR/"
-# Limpiar el dist/ viejo (ya no se necesita porque nginx sirve desde frontend/)
+# Sincronizar dist/ con la raiz de frontend/ (donde nginx sirve).
+# ATENCION: NO usamos --delete. Los --exclude de rsync solo previenen
+# la TRANSFERENCIA, no la ELIMINACION en el destino (eso nos quemo
+# el 2026-07-31: el rsync borro node_modules/, package.json, src/, etc).
+# Estrategia: rsync simple del dist/ a la raiz, sin borrado. Los assets
+# viejos de builds anteriores quedan en frontend/assets/ pero el
+# index.html nuevo apunta a los hashes nuevos, asi que nginx sirve
+# los correctos. Se pueden limpiar periodicamente con un find.
+log_info "Sincronizando dist/ con $FRONTEND_DIR/ (sin --delete) ..."
+sudo rsync -a "$FRONTEND_DIR/dist/" "$FRONTEND_DIR/"
 sudo rm -rf "$FRONTEND_DIR/dist"
 sudo chown -R www-data:www-data "$FRONTEND_DIR"
-log_ok "Frontend buildeado y sincronizado"
+log_ok "Frontend buildeado y sincronizado (modo seguro)"
 
 # Verificar que el .env sigue siendo el de prod
 if [[ ! -r "$BACKEND_DIR/.env" ]]; then
