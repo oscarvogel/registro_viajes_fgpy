@@ -307,6 +307,63 @@ Para verificar el documento de referencia sin escribir en producción:
 
 La lectura de referencia no debe consultar ni escribir una base de producción.
 
+### Carga de combustible desde imagen (OCR)
+
+El flujo **Cargar desde foto** de Combustible acepta dos tipos de comprobante: tickets de estación (INFONET/Petrobras/Lider Express) y remitos internos de Forestal Paraguay. La imagen se guarda con la misma evidencia de 60 días que `viaje_imagenes`. El chofer elige el tipo antes de abrir la cámara, escanea la foto y revisa/edita los campos detectados antes de confirmar.
+
+#### Convención: proveedor INTERNO (resuelto por nombre, id asignado por la DB)
+
+La migración crea el proveedor `INTERNO FORESTAL PARAGUAY` con un `INSERT IGNORE` (la columna `razon_social` tiene `UNIQUE`, así que el INSERT se vuelve no-op si ya existe). El id lo asigna la DB; **no se hardcodea** porque eso permitiría pisar accidentalmente el `id=1` histórico (`PROVEEDOR GENERICO`, presente en 815 movimientos de combustible previos).
+
+El backend lo resuelve por nombre (case-insensitive) con `models.get_internal_provider_id(db)` (definido en `backend/models.py`). Si no hay ningún proveedor con "INTERNO" en la razón social, la función lanza `RuntimeError` con mensaje claro; si hay más de uno, también falla para forzar una decisión manual.
+
+**Importante:** el `id=1` (PROVEEDOR GENERICO) **no se toca**. Cualquier reporte histórico que diga `proveedor_id = 1` sigue mostrándose como "PROVEEDOR GENERICO"; el INTERNO es un proveedor nuevo y separado.
+
+El script de verificación `20260731_verify_combustible_imagenes.sql` devuelve el id concreto del INTERNO tras la primera migración. Anotar ese id en este README al desplegar (referencia operativa, no regla hardcodeada).
+
+#### Migración MySQL
+
+Antes de migrar producción, confirmar la base seleccionada, inspeccionar la estructura actual y realizar un backup. El script crea la tabla `combustible_imagenes` con FK a `movimientocombustible(id)`, índice único sobre `token_hash` e índice de expiración, e inserta el proveedor INTERNO; es idempotente:
+
+```bash
+set -Eeuo pipefail
+umask 077
+
+: "${DB_NAME:?Definir DB_NAME}"
+: "${MYSQL_CNF:?Definir MYSQL_CNF con ruta absoluta}"
+: "${BACKUP_DIR:?Definir BACKUP_DIR con ruta absoluta}"
+[[ "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]]
+[[ "$MYSQL_CNF" = /* && -r "$MYSQL_CNF" ]]
+[[ "$BACKUP_DIR" = /* ]]
+install -d -m 0700 -- "$BACKUP_DIR"
+
+BACKUP="$(mktemp --tmpdir="$BACKUP_DIR" "pre-combustible-img-${DB_NAME}-$(date +%Y%m%d-%H%M%S)-XXXXXX.sql")"
+cleanup_pre_migration() {
+  status=$?; trap - ERR INT TERM HUP
+  rm -f -- "$BACKUP"
+  (( status != 0 )) || status=1
+  exit "$status"
+}
+trap cleanup_pre_migration ERR INT TERM HUP
+
+mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers --events --databases "$DB_NAME" > "$BACKUP"
+[[ -s "$BACKUP" ]]
+sync -f "$BACKUP"
+trap - ERR INT TERM HUP
+
+mysql --defaults-extra-file="$MYSQL_CNF" "$DB_NAME" < backend/migrations/20260731_add_combustible_imagenes.sql
+mysql --defaults-extra-file="$MYSQL_CNF" --table "$DB_NAME" < backend/migrations/20260731_verify_combustible_imagenes.sql
+printf 'Backup previo: %s\n' "$BACKUP"
+```
+
+`mysql-client.cnf` debe ser legible solo por la cuenta operativa y contener las credenciales fuera del historial del shell. La migración es idempotente: reaplicarla no rompe nada. Antes de crear el UNIQUE sobre `token_hash` valida que no haya duplicados (no debería haber ninguno porque la tabla es nueva, pero el guard existe). Al final chequea que la convención del INTERNO quedó cumplida.
+
+La verificación debe mostrar:
+
+- tabla InnoDB `combustible_imagenes`, FK hacia `movimientocombustible(id)`;
+- índice no único exacto sobre `expires_at`, índice único exacto sobre `token_hash`, índices no únicos sobre `movimiento_id` y `sha256`;
+- al menos una fila en `proveedor` con `razon_social` que contenga `INTERNO` (case-insensitive); el `id` que devuelve esta consulta es el que el backend usará para los remitos internos.
+
 ## Frontend
 
 Instalar dependencias y verificar:
