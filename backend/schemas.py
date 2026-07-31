@@ -1,3 +1,5 @@
+from enum import Enum
+
 from pydantic import BaseModel, ConfigDict, field_validator, Field
 from typing import Optional, List, Union
 from datetime import date, time
@@ -216,6 +218,133 @@ class TripImageConfirmRequest(BaseModel):
 
 class TripImageConfirmResponse(BaseModel):
     viaje_id: int
+    imagen_id: int
+
+
+# --- Carga de combustible desde imagen (OCR) ---
+
+
+class FuelTipoComprobante(str, Enum):
+    """Tipos de comprobante de combustible aceptados por el flujo OCR."""
+
+    ticket = "ticket"
+    remito_interno = "remito_interno"
+
+
+class FuelTicketProposal(BaseModel):
+    """Propuesta del OCR para un ticket de estacion (INFONET)."""
+
+    fecha: date
+    hora: Optional[time] = None
+    litros: Decimal
+    km_hora: int
+    remito: str = Field(pattern=r"^\d{7}$")
+    ruc: Optional[str] = None
+    razon_social_emisor: Optional[str] = None
+    producto: Optional[str] = None
+    nro_tarjeta: Optional[str] = None
+    proveedor_id: Optional[int] = None
+    proveedor_candidato: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
+
+    @field_validator("litros")
+    @classmethod
+    def positive_litros(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("Los litros deben ser mayores a 0")
+        return value
+
+    @field_validator("km_hora")
+    @classmethod
+    def positive_km(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("El km del vehiculo debe ser mayor a 0")
+        return value
+
+
+class FuelRemitoInternoProposal(BaseModel):
+    """Propuesta del OCR para un remito interno Forestal Paraguay."""
+
+    fecha: date
+    hora: Optional[time] = None
+    litros: Decimal
+    kilometros: Optional[Decimal] = None
+    remito: str = Field(pattern=r"^\d{6,7}$")
+    lugar_carga: Optional[str] = None
+    patente_observada: Optional[str] = None
+    firmante: Optional[str] = None
+    contacto: Optional[str] = None
+    tipo: Optional[str] = None
+    proveedor_id: Optional[int] = None
+    proveedor_nombre: Optional[str] = None
+    warnings: List[str] = Field(default_factory=list)
+
+    @field_validator("litros")
+    @classmethod
+    def positive_litros(cls, value: Decimal) -> Decimal:
+        if value <= 0:
+            raise ValueError("Los litros deben ser mayores a 0")
+        return value
+
+    @field_validator("kilometros")
+    @classmethod
+    def non_negative_kilometros(cls, value: Optional[Decimal]) -> Optional[Decimal]:
+        if value is not None and value < 0:
+            raise ValueError("Los kilometros no pueden ser negativos")
+        return value
+
+
+class FuelImageAnalysisResponse(BaseModel):
+    upload_token: str
+    tipo: FuelTipoComprobante
+    proposal: dict  # FuelTicketProposal o FuelRemitoInternoProposal; el frontend valida
+
+
+class FuelTicketConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    upload_token: str
+    fecha_carga: date
+    hora_carga: Optional[time] = None
+    litros: Decimal
+    km_hora: float
+    equipo_id: int
+    paniol_id: Optional[int] = None
+    proveedor_id: int
+    tipo_combustible_id: Optional[int] = None
+    remito: str = Field(pattern=r"^\d{1,12}$")
+    observaciones: Optional[str] = None
+
+    @field_validator("litros", "km_hora")
+    @classmethod
+    def positive_required(cls, value):
+        if value is None or float(value) <= 0:
+            raise ValueError("Debe ser mayor a 0")
+        return value
+
+
+class FuelRemitoInternoConfirmRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    upload_token: str
+    fecha_carga: date
+    hora_carga: Optional[time] = None
+    litros: Decimal
+    km_hora: float
+    equipo_id: int
+    paniol_id: Optional[int] = None
+    remito: str = Field(pattern=r"^\d{1,12}$")
+    tipo_combustible_id: Optional[int] = None
+    observaciones: Optional[str] = None
+
+    @field_validator("litros", "km_hora")
+    @classmethod
+    def positive_required(cls, value):
+        if value is None or float(value) <= 0:
+            raise ValueError("Debe ser mayor a 0")
+        return value
+
+
+class FuelImageConfirmResponse(BaseModel):
+    movimiento_id: int
     imagen_id: int
 
 # --- Historial de Viajes (Outgoing to Frontend) ---
