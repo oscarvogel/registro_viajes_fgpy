@@ -246,14 +246,49 @@ else
   log_ok "venv/ ya existe, lo dejo"
 fi
 
-# Recrear node_modules/ si no existe
+# Recrear node_modules/ si no existe.
+# npm se corre como ROOT (con sudo) porque www-data no puede escribir
+# en /var/.npm/_logs. Despues se hace chown al directorio del frontend.
 if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
-  log_info "Instalando deps npm ..."
-  sudo -u www-data npm ci --prefix "$FRONTEND_DIR" 2>&1 | tail -5
+  log_info "Instalando deps npm (como root) ..."
+  sudo npm ci --prefix "$FRONTEND_DIR" 2>&1 | tail -5
+  sudo chown -R www-data:www-data "$FRONTEND_DIR"
   log_ok "node_modules/ instalado"
 else
-  log_ok "node_modules/ ya existe, lo dejo"
+  log_info "Actualizando node_modules/ si hay cambios en package-lock.json ..."
+  sudo npm ci --prefix "$FRONTEND_DIR" 2>&1 | tail -5 || log_warn "npm ci fallo, sigo con lo que hay"
+  sudo chown -R www-data:www-data "$FRONTEND_DIR"
 fi
+
+# Build del frontend
+log_info "Buildeando frontend (npm run build) ..."
+sudo npm --prefix "$FRONTEND_DIR" run build 2>&1 | tail -10
+if [[ ! -d "$FRONTEND_DIR/dist" ]]; then
+  log_err "Build del frontend fallo, no se genero dist/"
+  exit 1
+fi
+# Sincronizar dist/ con la raiz de frontend/ (donde nginx sirve). Usamos
+# --delete para limpiar assets viejos, pero excluimos los archivos fuente
+# Vite que tambien viven en frontend/ (src/, package.json, etc).
+log_info "Sincronizando dist/ con $FRONTEND_DIR/ ..."
+sudo rsync -a --delete \
+  --exclude='src/' \
+  --exclude='node_modules/' \
+  --exclude='package.json' \
+  --exclude='package-lock.json' \
+  --exclude='vite.config.js' \
+  --exclude='tailwind.config.js' \
+  --exclude='postcss.config.js' \
+  --exclude='tests/' \
+  --exclude='scripts/' \
+  --exclude='.env*' \
+  --exclude='public/' \
+  --exclude='dist/' \
+  "$FRONTEND_DIR/dist/" "$FRONTEND_DIR/"
+# Limpiar el dist/ viejo (ya no se necesita porque nginx sirve desde frontend/)
+sudo rm -rf "$FRONTEND_DIR/dist"
+sudo chown -R www-data:www-data "$FRONTEND_DIR"
+log_ok "Frontend buildeado y sincronizado"
 
 # Verificar que el .env sigue siendo el de prod
 if [[ ! -r "$BACKEND_DIR/.env" ]]; then
