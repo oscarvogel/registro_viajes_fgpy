@@ -125,6 +125,8 @@ DB_USER=$(echo "$DATABASE_URL" | sed -E 's|^mysql\+mysqlconnector://([^:]+):.*|\
 DB_PASS=$(echo "$DATABASE_URL" | sed -E 's|^mysql\+mysqlconnector://[^:]+:([^@]+)@.*|\1|')
 DB_HOST=$(echo "$DATABASE_URL" | sed -E 's|^.*@([^/]+)/.*|\1|')
 DB_NAME=$(echo "$DATABASE_URL" | sed -E 's|^.*/([^?]+)(\?.*)?$|\1|')
+# URL-decode la password (%40 -> @, etc). SQLAlchemy lo hace solo; mysql CLI no.
+DB_PASS=$(printf '%b' "${DB_PASS//%/\\x}")
 log_ok "DB destino: $DB_HOST / $DB_NAME (user $DB_USER)"
 
 # Conexion a DB
