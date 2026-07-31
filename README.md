@@ -321,6 +321,38 @@ El backend lo resuelve por nombre (case-insensitive) con `models.get_internal_pr
 
 El script de verificación `20260731_verify_combustible_imagenes.sql` devuelve el id concreto del INTERNO tras la primera migración. Anotar ese id en este README al desplegar (referencia operativa, no regla hardcodeada).
 
+#### Smoke con fotos reales
+
+Hay un script `backend/scripts/smoke_fuel_image.py` que automatiza el flujo contra un backend desplegado. Usa las fotos reales que Oscar compartió (ticket Petrobras 30/07/2026, remito interno #0007222). Para ejecutarlo:
+
+```bash
+pip install requests
+
+API_URL=https://viajes.forestalparaguay.com/api \
+AUTH_TOKEN=$(echo "eyJ...") \
+python backend/scripts/smoke_fuel_image.py \
+  --ticket /path/to/ticket_petrobras.jpg \
+  --remito /path/to/remito_0007222.jpg
+```
+
+Valores esperados al primer deploy (referencia, ajustar si la DB cambia):
+
+| Campo | Ticket Petrobras | Remito interno |
+|---|---|---|
+| fecha | 2026-07-30 | 2026-07-30 |
+| litros | 430 | 162 |
+| km_hora | 3362 | 7153.1 |
+| remito | 9938226 | 0007222 |
+| ruc | 80015646-0 | (no tiene) |
+| emisor | PETROBRAS | (no aplica) |
+| producto | DIESEL EURO 5 S-50 | (no aplica) |
+| lugar | (no aplica) | Gsibg |
+| firmante | (no aplica) | Fernando |
+| tipo | (no aplica) | INTERNO/GASOIL |
+| proveedor_id | (nuevo, inactivo) | INTERNO FORESTAL PARAGUAY |
+
+Con `--skip-confirm` solo se valida el OCR; sin esa flag, el script pide los `equipo_id` y `paniol_id` por stdin y persiste el movimiento. Para un primer deploy se recomienda usar `--skip-confirm` y comparar los campos extraídos contra la tabla antes de escribir.
+
 #### Migración MySQL
 
 Antes de migrar producción, confirmar la base seleccionada, inspeccionar la estructura actual y realizar un backup. El script crea la tabla `combustible_imagenes` con FK a `movimientocombustible(id)`, índice único sobre `token_hash` e índice de expiración, e inserta el proveedor INTERNO; es idempotente:
@@ -363,6 +395,31 @@ La verificación debe mostrar:
 - tabla InnoDB `combustible_imagenes`, FK hacia `movimientocombustible(id)`;
 - índice no único exacto sobre `expires_at`, índice único exacto sobre `token_hash`, índices no únicos sobre `movimiento_id` y `sha256`;
 - al menos una fila en `proveedor` con `razon_social` que contenga `INTERNO` (case-insensitive); el `id` que devuelve esta consulta es el que el backend usará para los remitos internos.
+
+#### Tests de integración con datos reales
+
+`backend/tests/test_fuel_image_integration.py` cubre el flujo end-to-end con los datos OCR de las fotos compartidas en julio 2026:
+
+- **Ticket Petrobras** (BOLETA 005577061024, RUC 80015646-0, 30/07/2026 13:30:56, 430 litros, km 3362, DIESEL EURO 5 S-50).
+- **Ticket Lider Express** (BOLETA 005572608217, RUC 80073986-8, 28/07/2026 22:37:57, 300 litros, km 77422).
+- **Remito interno Forestal Paraguay** (#0007222, 30/07/26 13:42, 162 litros, km 7153.1, Gsibg, Fernando, INTERNO/GASOIL).
+
+Los tests usan un `FakeVision` que devuelve la extracción esperada (lo que MiniMax debería devolver para esas fotos), evitando dependencia de la API real. Cubren:
+
+- analyze devuelve los campos esperados (fecha, litros, km, remito, RUC, producto).
+- Para ticket con RUC nuevo, el servicio crea el proveedor inactivo y devuelve warning.
+- Para remito interno, el proveedor se fuerza al INTERNO.
+- El confirm idempotente (mismo upload_token → mismo resultado).
+- El confirm bloquea con 403 a otro chofer que intenta reusar el token.
+- Si el INTERNO desaparece entre analyze y confirm, el confirm falla con 503.
+- Si MiniMax falla, no se persisten filas en la DB.
+- El storage no queda con archivos basura tras errores.
+
+Para correrlos:
+
+```bash
+py -m pytest backend/test_fuel_image_integration.py -v
+```
 
 ## Frontend
 
