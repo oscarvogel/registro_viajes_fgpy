@@ -75,6 +75,7 @@ log_step() { echo -e "${C_BOLD}${C_BLUE}==>${C_RESET} ${C_BOLD}$1${C_RESET}"; }
 log_ok()   { echo -e "   ${C_GREEN}OK${C_RESET} $1"; }
 log_warn() { echo -e "   ${C_YELLOW}WARN${C_RESET} $1"; }
 log_err()  { echo -e "   ${C_RED}ERR${C_RESET} $1"; }
+log_info() { echo -e "   ${C_BLUE}..${C_RESET} $1"; }
 
 confirm() {
   local prompt="$1"
@@ -136,26 +137,12 @@ if ! mysql -h "$DB_HOST" -u "$DB_USER" -p"$DB_PASS" -e "SELECT 1;" "$DB_NAME" >/
 fi
 log_ok "Conexion a DB OK"
 
-# Estado de git
-cd "$PROJECT_DIR"
-if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  log_err "$PROJECT_DIR no es un repo git"
+# Estado actual del webroot (no necesita ser un git repo, solo existir)
+if [[ ! -d "$PROJECT_DIR" ]]; then
+  log_err "$PROJECT_DIR no existe"
   exit 1
 fi
-CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-CURRENT_COMMIT=$(git rev-parse --short HEAD)
-log_ok "Branch actual: $CURRENT_BRANCH @ $CURRENT_COMMIT"
-
-# Target commit
-git fetch origin main >/dev/null 2>&1 || log_warn "fetch de origin/main fallo"
-if [[ -z "$TARGET_COMMIT" ]]; then
-  TARGET_COMMIT=$(git rev-parse origin/main 2>/dev/null || echo "")
-fi
-if [[ -z "$TARGET_COMMIT" ]]; then
-  log_err "No se pudo determinar el commit objetivo. Usar --target-commit SHA."
-  exit 1
-fi
-log_ok "Commit objetivo: $TARGET_COMMIT"
+log_ok "Webroot presente: $PROJECT_DIR"
 
 # Service estado
 SERVICE_ACTIVE=$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || echo "unknown")
@@ -192,14 +179,88 @@ log_ok "SHA-256: $(cat "$BACKUP_SHA")"
 
 # --- 3. Pull de main ----------------------------------------------------------
 
-log_step "Pull de main"
+log_step "Sync del repo al webroot"
 
-confirm "git pull origin main + checkout a $TARGET_COMMIT?" || { log_warn "Pull cancelado"; exit 0; }
+REPO_URL="https://github.com/oscarvogel/registro_viajes_fgpy.git"
+REPO_DIR="/var/www/html/django/viajes_fgpy_repo"
+WEBROOT="$PROJECT_DIR"
 
-git pull --ff-only origin main
-git checkout "$TARGET_COMMIT"
+# Asegurar repo auxiliar
+if [[ ! -d "$REPO_DIR/.git" ]]; then
+  log_info "Clonando repo (depth 1) en $REPO_DIR ..."
+  sudo mkdir -p "$REPO_DIR"
+  sudo chown "$USER:$USER" "$REPO_DIR"
+  git clone --depth 1 -b main "$REPO_URL" "$REPO_DIR"
+else
+  log_info "Actualizando repo auxiliar en $REPO_DIR ..."
+  cd "$REPO_DIR"
+  git fetch --depth 1 origin main
+  git reset --hard origin/main
+fi
+
+cd "$REPO_DIR"
 NEW_COMMIT=$(git rev-parse --short HEAD)
-log_ok "Ahora en $NEW_COMMIT"
+log_ok "Commit en repo auxiliar: $NEW_COMMIT"
+
+# Rsync al webroot, preservando .env y data/
+# (venv/ y node_modules/ se regeneran abajo si faltan)
+confirm "rsync del repo al webroot $WEBROOT (preserva backend/.env)?" || { log_warn "Rsync cancelado"; exit 0; }
+
+# Si el webroot ya tiene un .git/ (deploys posteriores), lo actualizamos
+# en lugar de sobreescribirlo.
+if [[ -d "$WEBROOT/.git" ]]; then
+  cd "$WEBROOT"
+  git fetch --depth 1 origin main
+  git reset --hard origin/main
+  log_ok "Webroot actualizado via git (sin rsync)"
+else
+  # Primer deploy: rsync desde el repo auxiliar al webroot.
+  # NO usamos --delete para no borrar archivos locales no versionados.
+  sudo mkdir -p "$WEBROOT"
+  sudo rsync -a \
+    --chown=www-data:www-data \
+    --exclude='backend/.env' \
+    --exclude='backend/venv/' \
+    --exclude='frontend/node_modules/' \
+    --exclude='frontend/dist/' \
+    --exclude='.git/' \
+    "$REPO_DIR/" "$WEBROOT/"
+  # Preservar el .env actual si existe (rsync --delete ya lo excluyo, pero
+  # si es el primer deploy no hay .env en el webroot, asi que no hace nada).
+  if [[ -r "$BACKEND_DIR/.env" ]]; then
+    sudo chown www-data:www-data "$BACKEND_DIR/.env"
+    sudo chmod 640 "$BACKEND_DIR/.env"
+  fi
+  log_ok "Rsync OK al webroot"
+fi
+
+# Recrear venv/ si no existe
+if [[ ! -d "$BACKEND_DIR/venv" ]]; then
+  log_info "Creando venv/ y deps Python ..."
+  sudo apt-get install -y python3-venv python3-dev default-libmysqlclient-dev build-essential pkg-config 2>&1 | tail -3
+  sudo -u www-data python3 -m venv "$BACKEND_DIR/venv"
+  sudo -u www-data "$BACKEND_DIR/venv/bin/pip" install --upgrade pip wheel setuptools 2>&1 | tail -2
+  sudo -u www-data "$BACKEND_DIR/venv/bin/pip" install -r "$BACKEND_DIR/requirements.txt" 2>&1 | tail -5
+  log_ok "venv/ creado y deps instaladas"
+else
+  log_ok "venv/ ya existe, lo dejo"
+fi
+
+# Recrear node_modules/ si no existe
+if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
+  log_info "Instalando deps npm ..."
+  sudo -u www-data npm ci --prefix "$FRONTEND_DIR" 2>&1 | tail -5
+  log_ok "node_modules/ instalado"
+else
+  log_ok "node_modules/ ya existe, lo dejo"
+fi
+
+# Verificar que el .env sigue siendo el de prod
+if [[ ! -r "$BACKEND_DIR/.env" ]]; then
+  log_err "backend/.env NO existe despues del sync. Algo salio mal."
+  exit 1
+fi
+log_ok "backend/.env preservado correctamente"
 
 # --- 4. Edicion de nginx ------------------------------------------------------
 
