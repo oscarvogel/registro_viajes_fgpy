@@ -157,12 +157,22 @@ def math_isfinite(x: float) -> bool:
 
 def _parse_remito(value: Any, *, expected_length: int, field: str = "remito") -> str:
     """Remito: solo digitos, longitud exacta. Para el remito interno manuscrito
-    se permite variacion de 6-7 digitos (letra ambigua)."""
+    se permite variacion de 6-7 digitos (letra ambigua).
+
+    Acepta un prefijo de una letra (tipica del formato INFONET, ej. "C-001-123"
+    se imprime como "C001123" en el ticket). El prefijo se descarta y se valida
+    solo la parte numerica. Tambien acepta separadores "-" o espacios.
+    """
     if value is None or (isinstance(value, str) and not value.strip()):
         raise FuelExtractionValidationError(f"{field} requerido")
     if not isinstance(value, str):
         raise FuelExtractionValidationError(f"{field} invalido")
     text = value.strip()
+    # Quitar prefijo de 1 letra seguido opcionalmente de "-" o espacio
+    # (formato INFONET paraguayo: C-001-123 o C001123)
+    text = re.sub(r"^[A-Za-z][\s-]?", "", text)
+    # Quitar separadores "-" y espacios que puedan quedar
+    text = re.sub(r"[\s-]", "", text)
     if not _DIGITS_ONLY.fullmatch(text):
         raise FuelExtractionValidationError(f"{field} debe ser solo digitos")
     accepted = (expected_length,) if isinstance(expected_length, int) else tuple(expected_length)
