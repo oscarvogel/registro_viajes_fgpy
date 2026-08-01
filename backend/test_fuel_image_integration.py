@@ -321,18 +321,21 @@ class CrossTypeIntegrationTest(FuelIntegrationTestBase):
         self.assertIs(vision.last_schema, FUEL_REMITO_SCHEMA)
 
     def test_remito_schema_not_used_for_ticket(self):
-        """El service usa el schema segun `tipo`, no segun el contenido del OCR."""
-        from fastapi import HTTPException
+        """El service usa el schema segun `tipo`, no segun el contenido del OCR.
+
+        Desde 2026-08-01 el normalizador de ticket es permisivo (acepta
+        null en fecha/km_hora), asi que un payload tipo remito pasa la
+        normalizacion con km_hora y campos-de-viaje en null. El test
+        verifica que el schema elegido por el service es el de ticket."""
         vision = FakeVision(response=REMITO_0007222_OCR)
         service = self._service(vision)
-        # El contenido del remito no encaja con la normalizacion de ticket;
-        # esperamos 422. Lo importante: vision.last_schema debe ser el de
-        # ticket (no el de remito), porque el service eligio schema por tipo.
-        with self.assertRaises(HTTPException):
-            service.analyze(
-                JPEG, "x.jpg", "image/jpeg", schemas.FuelTipoComprobante.ticket
-            )
+        result = service.analyze(
+            JPEG, "x.jpg", "image/jpeg", schemas.FuelTipoComprobante.ticket
+        )
+        # El service eligio el schema de ticket (no el de remito), aunque
+        # el contenido del OCR sea de un remito.
         self.assertIs(vision.last_schema, FUEL_TICKET_SCHEMA)
+        self.assertEqual(result["tipo"], "ticket")
 
     def test_vision_error_does_not_create_db_rows(self):
         """Si MiniMax falla, no se persisten movimientos ni imagenes.

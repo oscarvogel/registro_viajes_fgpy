@@ -29,10 +29,10 @@ _DIGITS_ONLY = re.compile(r"^\d+$")
 
 @dataclass(frozen=True)
 class NormalizedTicketExtraction:
-    fecha: date
+    fecha: date | None
     hora: time | None
     litros: Decimal
-    km_hora: int
+    km_hora: int | None
     remito: str
     ruc: str | None
     razon_social_emisor: str | None
@@ -231,14 +231,27 @@ def _clean_patente(value: Any) -> str | None:
 def normalize_ticket_extraction(data: Mapping[str, Any]) -> NormalizedTicketExtraction:
     """Valida y normaliza la extraccion OCR de un ticket de estacion.
 
-    - Rechaza litros=0, km_hora=0, fecha invalida, remito con longitud
-      distinta de 7, RUC con formato no paraguayo.
+    - Rechaza litros=0, remito con longitud distinta de 7.
+    - fecha y km_hora son opcionales: si el OCR no las lee, devuelve None
+      y el operador las completa manualmente.
     - Devuelve NormalizedTicketExtraction o lanza FuelExtractionValidationError.
     """
-    fecha = _parse_date_strict(data.get("fecha"))
-    hora = _parse_time_strict(data.get("hora"))
+    fecha = _parse_date_strict(data.get("fecha"), optional=True)
+    hora_raw = data.get("hora")
+    hora: time | None = None
+    if hora_raw is not None:
+        try:
+            hora = _parse_time_strict(hora_raw)
+        except FuelExtractionValidationError:
+            hora = None
     litros = _parse_decimal(data.get("litros"), field="litros", allow_zero=False)
-    km_hora = _parse_integer(data.get("km_hora"), field="km_hora", allow_zero=False)
+    km_hora_raw = data.get("km_hora")
+    km_hora: int | None = None
+    if km_hora_raw is not None and not (isinstance(km_hora_raw, str) and not km_hora_raw.strip()):
+        try:
+            km_hora = _parse_integer(km_hora_raw, field="km_hora", allow_zero=False)
+        except FuelExtractionValidationError:
+            km_hora = None
     remito = _parse_remito(data.get("remito"), expected_length=7)
     ruc = _clean_ruc(data.get("ruc_emisor"))
     razon_social = _clean_optional_text(data.get("razon_social_emisor"))
@@ -267,14 +280,23 @@ def normalize_remito_interno_extraction(data: Mapping[str, Any]) -> NormalizedRe
       opcionales: null si el OCR no los leyó.
     """
     fecha = _parse_date_strict(data.get("fecha"), optional=True)
-    hora = _parse_time_strict(data.get("hora"))
+    hora_raw = data.get("hora")
+    hora: time | None = None
+    if hora_raw is not None:
+        try:
+            hora = _parse_time_strict(hora_raw)
+        except FuelExtractionValidationError:
+            hora = None  # hora opcional: si el LLM no la lee, no rompemos
     litros = _parse_decimal(data.get("litros"), field="litros", allow_zero=False)
     kilometros_raw = data.get("kilometros")
     kilometros: Decimal | None
     if kilometros_raw is None or (isinstance(kilometros_raw, str) and not kilometros_raw.strip()):
         kilometros = None
     else:
-        kilometros = _parse_decimal(kilometros_raw, field="kilometros", allow_zero=True)
+        try:
+            kilometros = _parse_decimal(kilometros_raw, field="kilometros", allow_zero=True)
+        except FuelExtractionValidationError:
+            kilometros = None  # km opcional: manuscrito ilegible
     remito = _parse_remito(data.get("remito"), expected_length=(6, 7))
     lugar = _clean_optional_text(data.get("lugar_carga"))
     patente = _clean_patente(data.get("patente_observada"))

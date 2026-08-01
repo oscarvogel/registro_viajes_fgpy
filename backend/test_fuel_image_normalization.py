@@ -70,10 +70,12 @@ class TicketNormalizationTests(unittest.TestCase):
         self.assertEqual(out.litros, Decimal("1234.56"))
 
     def test_km_hora_zero_rejected(self):
+        # km_hora es opcional desde 2026-08-01: si el LLM no lo lee o devuelve
+        # 0/inválido, se acepta como None y se agrega warning al proposal.
         data = self._valid()
         data["km_hora"] = "0"
-        with self.assertRaises(FuelExtractionValidationError):
-            normalize_ticket_extraction(data)
+        out = normalize_ticket_extraction(data)
+        self.assertIsNone(out.km_hora)
 
     def test_remito_wrong_length_rejected(self):
         data = self._valid()
@@ -116,8 +118,10 @@ class TicketNormalizationTests(unittest.TestCase):
     def test_invalid_time_rejected(self):
         data = self._valid()
         data["hora"] = "13:30:99"
-        with self.assertRaises(FuelExtractionValidationError):
-            normalize_ticket_extraction(data)
+        # hora es opcional desde 2026-08-01: si el LLM devuelve un valor
+        # invalido, se acepta como None (no rompemos el flujo).
+        out = normalize_ticket_extraction(data)
+        self.assertIsNone(out.hora)
 
 
 class RemitoInternoNormalizationTests(unittest.TestCase):

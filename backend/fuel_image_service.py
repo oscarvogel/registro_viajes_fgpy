@@ -172,11 +172,18 @@ class FuelImageService:
         tipo_combustible_id = _map_product_to_tipo_combustible(
             self.db, normalized.producto
         )
+        # Si la fecha o km_hora vienen null del OCR, agregar warnings
+        if normalized.fecha is None:
+            if not any("fecha" in w.lower() for w in warnings):
+                warnings.append("Fecha no detectada en el comprobante; ingresela manualmente")
+        if normalized.km_hora is None:
+            if not any("km" in w.lower() for w in warnings):
+                warnings.append("Km/Hora del camion no detectado; ingreselo manualmente")
         return {
             "upload_token": token,
             "tipo": schemas.FuelTipoComprobante.ticket.value,
             "proposal": {
-                "fecha": normalized.fecha.isoformat(),
+                "fecha": normalized.fecha.isoformat() if normalized.fecha else None,
                 "hora": normalized.hora.isoformat() if normalized.hora else None,
                 "litros": str(normalized.litros),
                 "km_hora": normalized.km_hora,
