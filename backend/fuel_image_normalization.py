@@ -42,7 +42,7 @@ class NormalizedTicketExtraction:
 
 @dataclass(frozen=True)
 class NormalizedRemitoInternoExtraction:
-    fecha: date
+    fecha: date | None
     hora: time | None
     litros: Decimal
     kilometros: Decimal | None
@@ -54,9 +54,16 @@ class NormalizedRemitoInternoExtraction:
     tipo: str | None
 
 
-def _parse_date_strict(value: Any, *, allow_two_digit_year: bool = True) -> date:
-    """Acepta DD/MM/YYYY o DD/MM/YY. None o cualquier otro formato -> error."""
+def _parse_date_strict(value: Any, *, allow_two_digit_year: bool = True, optional: bool = False) -> date | None:
+    """Acepta DD/MM/YYYY o DD/MM/YY. None o cualquier otro formato -> error.
+    Si optional=True y el valor es None, devuelve None (en vez de error)."""
+    if value is None:
+        if optional:
+            return None
+        raise FuelExtractionValidationError("fecha invalida")
     if not isinstance(value, str) or not value.strip():
+        if optional:
+            return None
         raise FuelExtractionValidationError("fecha invalida")
     text = value.strip()
     patterns = (
@@ -253,12 +260,13 @@ def normalize_ticket_extraction(data: Mapping[str, Any]) -> NormalizedTicketExtr
 def normalize_remito_interno_extraction(data: Mapping[str, Any]) -> NormalizedRemitoInternoExtraction:
     """Valida y normaliza la extraccion OCR de un remito interno manuscrito.
 
-    - Rechaza litros=0, fecha invalida, remito con longitud fuera de 6-7.
+    - Acepta fecha nula (campo manuscrito a veces ilegible); se devuelve None
+      y se agrega un warning para que el operador la complete manualmente.
     - Acepta kilometros nulo (campo manuscrito a veces ilegible).
     - Campos de texto (lugar, patente, firmante, contacto, tipo) son
       opcionales: null si el OCR no los leyó.
     """
-    fecha = _parse_date_strict(data.get("fecha"))
+    fecha = _parse_date_strict(data.get("fecha"), optional=True)
     hora = _parse_time_strict(data.get("hora"))
     litros = _parse_decimal(data.get("litros"), field="litros", allow_zero=False)
     kilometros_raw = data.get("kilometros")

@@ -212,11 +212,16 @@ class FuelImageService:
             tipo_combustible_id = 1
         elif normalized.tipo and "nafta" in normalized.tipo.lower():
             tipo_combustible_id = 2
+        # Si la fecha viene null del OCR (no se pudo leer), propagar el warning
+        # para que el operador la complete manualmente.
+        if normalized.fecha is None:
+            if not any("fecha" in w.lower() for w in warnings):
+                warnings.append("Fecha no detectada en el comprobante; ingresela manualmente")
         return {
             "upload_token": token,
             "tipo": schemas.FuelTipoComprobante.remito_interno.value,
             "proposal": {
-                "fecha": normalized.fecha.isoformat(),
+                "fecha": normalized.fecha.isoformat() if normalized.fecha else None,
                 "hora": normalized.hora.isoformat() if normalized.hora else None,
                 "litros": str(normalized.litros),
                 "kilometros": str(normalized.kilometros) if normalized.kilometros is not None else None,

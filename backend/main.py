@@ -801,6 +801,8 @@ async def analyze_fuel_image(
         raise HTTPException(503, "Servicio de analisis no disponible")
     except MiniMaxVisionTimeoutError:
         raise HTTPException(504, "El analisis excedio el tiempo limite")
+    except json.JSONDecodeError:
+        raise HTTPException(502, "No se pudo leer la imagen (formato no valido). Proba con otra foto.")
     except MiniMaxVisionError:
         raise HTTPException(502, "No se pudo analizar la imagen")
     finally:
