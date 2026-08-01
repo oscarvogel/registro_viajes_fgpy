@@ -230,7 +230,7 @@ def _messages(image: Path, prompt: str) -> list[dict[str, Any]]:
         {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "understand_image",
-            "arguments": {"image_source": str(image), "prompt": PROMPT},
+            "arguments": {"image_source": str(image), "prompt": prompt},
         }},
     ]
 
