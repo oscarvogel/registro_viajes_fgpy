@@ -34,16 +34,20 @@ class VisionSchema:
 
     - ``required``: conjunto exacto de claves que el JSON debe tener.
     - ``text_fields``: claves que deben ser string o null.
-    - ``weight_fields``: claves numericas (Decimal-compatible); default vacio.
+    - ``weight_fields``: claves numericas de peso (Decimal-compatible); default vacio.
+    - ``numeric_fields``: claves numericas en general (int/float/str); default vacio.
+      Usar para campos como litros, km_hora, remito (numeros que el LLM puede
+      devolver como int, float, o string con separadores).
     """
 
     required: frozenset
     text_fields: frozenset
     weight_fields: frozenset = frozenset()
+    numeric_fields: frozenset = frozenset()
 
     @property
     def confidence_fields(self) -> frozenset:
-        return self.text_fields | self.weight_fields
+        return self.text_fields | self.weight_fields | self.numeric_fields
 
 
 PROMPT = """Analiza la imagen para precargar un viaje. Devuelve EXCLUSIVAMENTE un unico objeto JSON,
@@ -152,13 +156,15 @@ def _fuel_ticket_schema() -> VisionSchema:
         "nro_tarjeta", "confidence", "warnings",
     }
     text_fields = {
-        "fecha", "hora", "litros", "km_hora", "remito",
+        "fecha", "hora",
         "ruc_emisor", "razon_social_emisor", "producto",
         "nro_tarjeta",
     }
+    numeric_fields = {"litros", "km_hora", "remito"}
     return VisionSchema(
         required=frozenset(required),
         text_fields=frozenset(text_fields),
+        numeric_fields=frozenset(numeric_fields),
     )
 
 
@@ -169,13 +175,15 @@ def _fuel_remito_schema() -> VisionSchema:
         "tipo", "confidence", "warnings",
     }
     text_fields = {
-        "fecha", "hora", "litros", "kilometros", "remito",
+        "fecha", "hora",
         "lugar_carga", "patente_observada", "firmante", "contacto",
         "tipo",
     }
+    numeric_fields = {"litros", "kilometros", "remito"}
     return VisionSchema(
         required=frozenset(required),
         text_fields=frozenset(text_fields),
+        numeric_fields=frozenset(numeric_fields),
     )
 
 
@@ -486,6 +494,19 @@ def _validate(value: dict[str, Any], schema: VisionSchema) -> None:
             })
         )
         for key in schema.weight_fields
+    ):
+        raise TypeError
+    if any(
+        value[key] is not None and (
+            isinstance(value[key], bool)
+            or not isinstance(value[key], (int, float, str))
+            or (isinstance(value[key], (int, float)) and not math.isfinite(value[key]))
+            or (isinstance(value[key], str) and value[key].strip().lower() in {
+                "nan", "+nan", "-nan", "inf", "+inf", "-inf",
+                "infinity", "+infinity", "-infinity",
+            })
+        )
+        for key in schema.numeric_fields
     ):
         raise TypeError
     confidence_fields = schema.confidence_fields
