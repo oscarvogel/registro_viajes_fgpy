@@ -676,12 +676,12 @@ def get_fuel_image_service(db: Session):
     return FuelImageService(db, get_fuel_image_storage(), get_fuel_image_vision(), session_factory=database.SessionLocal)
 
 
-def analyze_fuel_image_in_worker(data, original_name, mime_type, tipo, storage, session_factory=None):
+def analyze_fuel_image_in_worker(data, original_name, mime_type, tipo, storage, current_user=None, session_factory=None):
     factory = session_factory or database.SessionLocal
     db = factory()
     try:
         service = FuelImageService(db, storage, get_fuel_image_vision(), session_factory=factory)
-        return service.analyze(data, original_name, mime_type, tipo)
+        return service.analyze(data, original_name, mime_type, tipo, current_user=current_user)
     finally:
         db.close()
 
@@ -790,6 +790,7 @@ async def analyze_fuel_image(
             file.content_type or "",
             tipo_enum,
             storage,
+            current_user,
         )
     except ImageStorageConfigError:
         raise HTTPException(503, "Servicio de imagen no disponible")

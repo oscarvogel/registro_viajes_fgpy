@@ -18,6 +18,7 @@ Convencion del proveedor INTERNO (ver backend/models.py):
 from __future__ import annotations
 
 import hashlib
+import re
 import unicodedata
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -46,6 +47,26 @@ from fuel_image_normalization import (
 )
 
 from logger import app_logger
+
+
+def _firmante_matches_chofer(firmante: str, chofer: models.Empleado) -> bool:
+    """Compara el firmante del OCR contra el nombre del chofer logueado.
+    Tolerante a errores de OCR: case-insensitive, sin acentos, match por
+    palabra. Devuelve True si al menos una palabra del nombre o apellido
+    del chofer aparece en el firmante (o viceversa).
+    """
+    def _norm(text: str) -> set[str]:
+        text = unicodedata.normalize("NFKD", text.lower())
+        text = "".join(c for c in text if not unicodedata.combining(c))
+        text = re.sub(r"[^a-z0-9 ]", " ", text)
+        return {w for w in text.split() if len(w) >= 3}
+    f_norm = _norm(firmante)
+    if not f_norm:
+        return True  # No hay firmante para comparar; no agregamos warning.
+    c_norm = _norm(f"{chofer.nombre} {chofer.apellido}")
+    if not c_norm:
+        return True
+    return bool(f_norm & c_norm)
 
 
 def _normalize_ruc(ruc: str | None) -> str:
@@ -134,6 +155,7 @@ class FuelImageService:
         original_name: str,
         mime_type: str,
         tipo: schemas.FuelTipoComprobante,
+        current_user: models.Empleado | None = None,
     ) -> dict[str, Any]:
         if self.vision is None:
             raise RuntimeError("Vision dependency is required for image analysis")
@@ -156,10 +178,13 @@ class FuelImageService:
         warnings = list(raw.get("warnings", []))
 
         if tipo is schemas.FuelTipoComprobante.ticket:
-            return self._build_ticket_proposal(temporary.token, raw, warnings)
-        return self._build_remito_proposal(temporary.token, raw, warnings)
+            return self._build_ticket_proposal(temporary.token, raw, warnings, current_user)
+        return self._build_remito_proposal(temporary.token, raw, warnings, current_user)
 
-    def _build_ticket_proposal(self, token: str, raw: dict, warnings: list[str]) -> dict:
+    def _build_ticket_proposal(
+        self, token: str, raw: dict, warnings: list[str],
+        current_user: models.Empleado | None = None,
+    ) -> dict:
         try:
             normalized = normalize_ticket_extraction(raw)
         except FuelExtractionValidationError as exc:
@@ -199,7 +224,10 @@ class FuelImageService:
             },
         }
 
-    def _build_remito_proposal(self, token: str, raw: dict, warnings: list[str]) -> dict:
+    def _build_remito_proposal(
+        self, token: str, raw: dict, warnings: list[str],
+        current_user: models.Empleado | None = None,
+    ) -> dict:
         try:
             normalized = normalize_remito_interno_extraction(raw)
         except FuelExtractionValidationError as exc:
@@ -224,6 +252,16 @@ class FuelImageService:
         if normalized.fecha is None:
             if not any("fecha" in w.lower() for w in warnings):
                 warnings.append("Fecha no detectada en el comprobante; ingresela manualmente")
+        # Validar que el firmante del remito coincida con el chofer logueado.
+        # Tolerancia a errores de OCR (case-insensitive, sin acentos, match
+        # parcial por palabra). Si no coincide, warning.
+        if current_user is not None and normalized.firmante:
+            if not _firmante_matches_chofer(normalized.firmante, current_user):
+                chofer_nombre = f"{current_user.nombre} {current_user.apellido}".strip()
+                warnings.append(
+                    f"Firmante del remito ({normalized.firmante}) no coincide "
+                    f"con el chofer logueado ({chofer_nombre}); verificar antes de confirmar"
+                )
         return {
             "upload_token": token,
             "tipo": schemas.FuelTipoComprobante.remito_interno.value,
