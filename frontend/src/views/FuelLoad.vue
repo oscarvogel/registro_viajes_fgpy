@@ -6,7 +6,7 @@ import Swal from 'sweetalert2';
 import { useCatalogStore } from '../stores/catalog';
 import { API_URL } from '../config';
 import Autocomplete from '../components/Autocomplete.vue';
-import { buildFuelLastKmParams, buildFuelPayload, getLastFuelKmHora, getStoredUserId } from '../services/criticalScreens';
+import { buildFuelLastKmParams, buildFuelPayload, findEquipoByPatente, getLastFuelKmHora, getStoredUserId } from '../services/criticalScreens';
 import { FUEL_TIPO_REMITO_INTERNO, FUEL_TIPO_TICKET } from '../services/fuelImage';
 
 const catalog = useCatalogStore();
@@ -95,7 +95,7 @@ onMounted(async () => {
 
   const defaultPatente = localStorage.getItem('default_patente');
   if (defaultPatente && !form.value.equipo_id) {
-    const match = camiones.value.find(e => e.patente === defaultPatente);
+    const match = findEquipoByPatente(camiones.value, defaultPatente);
     if (match) {
       form.value.equipo_id = match.id;
       await fetchLastKmHora(match.id);
