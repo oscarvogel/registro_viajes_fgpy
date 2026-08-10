@@ -146,33 +146,35 @@ class FuelImageEndpointTests(unittest.TestCase):
 
     def test_confirm_ticket_happy_path(self):
         import main
-        token = self.storage.save_temp(JPEG, "t.jpg", "image/jpeg").token
-        request = schemas.FuelTicketConfirmRequest(
-            upload_token=token,
-            fecha_carga=datetime(2026, 7, 30).date(),
-            litros=430, km_hora=3362,
-            equipo_id=1, paniol_id=1, proveedor_id=2, remito="9938226",
-        )
-        out = main.confirm_fuel_image_ticket(request, self.db, self.empleado)
-        self.assertIn("movimiento_id", out)
-        self.assertIn("imagen_id", out)
-        self.assertEqual(self.db.query(models.MovimientoCombustible).count(), 1)
+        with patch("main.get_fuel_image_storage", return_value=self.storage):
+            token = self.storage.save_temp(JPEG, "t.jpg", "image/jpeg").token
+            request = schemas.FuelTicketConfirmRequest(
+                upload_token=token,
+                fecha_carga=datetime(2026, 7, 30).date(),
+                litros=430, km_hora=3362,
+                equipo_id=1, paniol_id=1, proveedor_id=2, remito="9938226",
+            )
+            out = main.confirm_fuel_image_ticket(request, self.db, self.empleado)
+            self.assertIn("movimiento_id", out)
+            self.assertIn("imagen_id", out)
+            self.assertEqual(self.db.query(models.MovimientoCombustible).count(), 1)
 
     def test_confirm_remito_interno_forces_interno_id(self):
         import main
         interno = self.db.query(models.Proveedor).filter(
             models.Proveedor.razon_social.ilike("%INTERNO%")
         ).one()
-        token = self.storage.save_temp(JPEG, "r.jpg", "image/jpeg").token
-        request = schemas.FuelRemitoInternoConfirmRequest(
-            upload_token=token,
-            fecha_carga=datetime(2026, 7, 30).date(),
-            litros=162, km_hora=7153.1,
-            equipo_id=1, paniol_id=1, remito="0007222",
-        )
-        out = main.confirm_fuel_image_remito_interno(request, self.db, self.empleado)
-        mov = self.db.get(models.MovimientoCombustible, out["movimiento_id"])
-        self.assertEqual(mov.proveedor_id, interno.id)
+        with patch("main.get_fuel_image_storage", return_value=self.storage):
+            token = self.storage.save_temp(JPEG, "r.jpg", "image/jpeg").token
+            request = schemas.FuelRemitoInternoConfirmRequest(
+                upload_token=token,
+                fecha_carga=datetime(2026, 7, 30).date(),
+                litros=162, km_hora=7153.1,
+                equipo_id=1, paniol_id=1, remito="0007222",
+            )
+            out = main.confirm_fuel_image_remito_interno(request, self.db, self.empleado)
+            mov = self.db.get(models.MovimientoCombustible, out["movimiento_id"])
+            self.assertEqual(mov.proveedor_id, interno.id)
 
 
 class _FakeUpload:
