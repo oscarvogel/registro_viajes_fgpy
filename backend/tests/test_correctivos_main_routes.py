@@ -1,7 +1,11 @@
 def test_app_principal_expone_rutas_correctivos():
     import main
 
-    paths = {route.path for route in main.app.routes}
+    paths = {
+        route.path
+        for route in main.app.routes
+        if hasattr(route, "path")
+    }
 
     assert "/api/correctivos/catalogos" in paths
     assert "/api/correctivos" in paths
