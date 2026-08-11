@@ -65,6 +65,7 @@ def api_env():
                 porcentaje=0,
             ),
             models.Proveedor(id=20, razon_social="Gomeria Test", activo=True),
+            models.Proveedor(id=21, razon_social="Taller Externo", activo=True),
             models.Equipo(
                 id=10,
                 descripcion="CAMION KIA",
@@ -79,6 +80,7 @@ def api_env():
             models.UnidadNegocio(id=1, descripcion="Transporte", activo=True),
             MonedaCorrectivo(id=1, descripcion="Guaranies", simbolo="Gs", cambio=1, activo=True),
             TipoTareaCorrectivo(id=3, tarea="Gomeria", descripcion="", activo=True),
+            TipoTareaCorrectivo(id=4, tarea="Mecanica", descripcion="", activo=True),
             RepuestoCorrectivo(id=30, descripcion="Valvula", activo=True),
             SectorCorrectivo(id=2, descripcion="Taller", activo=True),
         ]
@@ -102,8 +104,8 @@ def api_env():
         engine.dispose()
 
 
-def payload_base():
-    return {
+def payload_base(**overrides):
+    payload = {
         "fecha": "2026-08-11",
         "equipo_id": 10,
         "km_hora": 185420,
@@ -120,6 +122,8 @@ def payload_base():
             }
         ],
     }
+    payload.update(overrides)
+    return payload
 
 
 def test_catalogos_correctivos_devuelve_nombres_reales(api_env):
@@ -128,8 +132,14 @@ def test_catalogos_correctivos_devuelve_nombres_reales(api_env):
 
     assert response.status_code == 200
     data = response.json()
-    assert data["tareas"] == [{"id": 3, "descripcion": "Gomeria"}]
-    assert data["proveedores"] == [{"id": 20, "descripcion": "Gomeria Test"}]
+    assert data["tareas"] == [
+        {"id": 3, "descripcion": "Gomeria"},
+        {"id": 4, "descripcion": "Mecanica"},
+    ]
+    assert data["proveedores"] == [
+        {"id": 20, "descripcion": "Gomeria Test"},
+        {"id": 21, "descripcion": "Taller Externo"},
+    ]
     assert data["mecanicos"][0]["descripcion"] == "Mecanico Juan"
     assert data["equipos"][0]["patente"] == "AAPL657"
 
@@ -149,21 +159,14 @@ def test_post_correctivo_crea_cabecera_y_detalle(api_env):
 
 def test_post_correctivo_rechaza_usuario_suplantado(api_env):
     client, _ = api_env
-    payload = payload_base()
-    payload["usuario"] = "otro"
-
+    payload = payload_base(usuario="otro")
     response = client.post("/api/correctivos", json=payload)
-
     assert response.status_code == 422
 
 
 def test_post_correctivo_devuelve_400_para_proveedor_invalido(api_env):
     client, _ = api_env
-    payload = payload_base()
-    payload["proveedor_id"] = 999
-
-    response = client.post("/api/correctivos", json=payload)
-
+    response = client.post("/api/correctivos", json=payload_base(proveedor_id=999))
     assert response.status_code == 400
     assert "Proveedor inexistente" in response.json()["detail"]
 
@@ -171,7 +174,6 @@ def test_post_correctivo_devuelve_400_para_proveedor_invalido(api_env):
 def test_get_correctivo_devuelve_trabajos(api_env):
     client, _ = api_env
     created = client.post("/api/correctivos", json=payload_base()).json()
-
     response = client.get(f"/api/correctivos/{created['id']}")
 
     assert response.status_code == 200
@@ -179,6 +181,43 @@ def test_get_correctivo_devuelve_trabajos(api_env):
     assert data["patente"] == "AAPL657"
     assert data["trabajos"][0]["tipo_tarea"] == "Gomeria"
     assert data["trabajos"][0]["detalle"] == "Desarme, reparacion y montaje"
+
+
+def test_historial_filtra_por_tipo_externo_y_proveedor(api_env):
+    client, _ = api_env
+    client.post("/api/correctivos", json=payload_base())
+    client.post(
+        "/api/correctivos",
+        json=payload_base(
+            descripcion="Ajuste de frenos interno",
+            externo=False,
+            proveedor_id=None,
+            mecanico_id=8,
+            trabajos=[{"tipo_tarea_id": 4, "detalle": "Regular frenos"}],
+        ),
+    )
+    client.post(
+        "/api/correctivos",
+        json=payload_base(
+            descripcion="Reparacion mecanica externa",
+            proveedor_id=21,
+            trabajos=[{"tipo_tarea_id": 4, "detalle": "Cambiar extremo"}],
+        ),
+    )
+
+    por_tarea = client.get("/api/correctivos?tipo_tarea_id=3")
+    internos = client.get("/api/correctivos?externo=false")
+    por_proveedor = client.get("/api/correctivos?proveedor_id=21")
+
+    assert por_tarea.status_code == 200
+    assert len(por_tarea.json()) == 1
+    assert por_tarea.json()[0]["descripcion"] == "Pinchadura cubierta trasera derecha"
+    assert internos.status_code == 200
+    assert len(internos.json()) == 1
+    assert internos.json()[0]["externo"] is False
+    assert por_proveedor.status_code == 200
+    assert len(por_proveedor.json()) == 1
+    assert por_proveedor.json()[0]["proveedor_id"] == 21
 
 
 def test_historial_por_equipo_y_rango_invalido(api_env):
@@ -189,9 +228,7 @@ def test_historial_por_equipo_y_rango_invalido(api_env):
     assert response.status_code == 200
     assert len(response.json()) == 1
 
-    invalid = client.get(
-        "/api/correctivos?fecha_desde=2026-08-12&fecha_hasta=2026-08-11"
-    )
+    invalid = client.get("/api/correctivos?fecha_desde=2026-08-12&fecha_hasta=2026-08-11")
     assert invalid.status_code == 400
 
 
