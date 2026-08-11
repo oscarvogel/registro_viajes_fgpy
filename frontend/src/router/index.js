@@ -8,6 +8,8 @@ import Settings from '../views/Settings.vue'
 import FuelLoad from '../views/FuelLoad.vue'
 import FuelImageUpload from '../views/FuelImageUpload.vue'
 import CarretonMove from '../views/CarretonMove.vue'
+import CorrectivesHome from '../views/CorrectivesHome.vue'
+import CorrectiveCreate from '../views/CorrectiveCreate.vue'
 import AdminClientLogs from '../views/AdminClientLogs.vue'
 import AdminDashboard from '../views/AdminDashboard.vue'
 import { resolveAuthNavigation } from './authGuard.js'
@@ -22,6 +24,8 @@ const routes = [
   { path: '/fuel-load', component: FuelLoad, meta: { requiresAuth: true } },
   { path: '/fuel-load/image', component: FuelImageUpload, meta: { requiresAuth: true } },
   { path: '/carreton-move', component: CarretonMove, meta: { requiresAuth: true } },
+  { path: '/correctivos', component: CorrectivesHome, meta: { requiresAuth: true } },
+  { path: '/correctivos/nuevo', component: CorrectiveCreate, meta: { requiresAuth: true } },
   { path: '/settings', component: Settings, meta: { requiresAuth: true } },
   { path: '/admin/dashboard', component: AdminDashboard, meta: { requiresAuth: true, requiresAdmin: true } },
   { path: '/admin/logs', component: AdminClientLogs, meta: { requiresAuth: true, requiresAdmin: true } },

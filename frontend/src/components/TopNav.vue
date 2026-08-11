@@ -11,6 +11,8 @@ const title = computed(() => {
     '/new-trip': 'Nuevo viaje',
     '/fuel-load': 'Combustible',
     '/carreton-move': 'Carreton',
+    '/correctivos': 'Correctivos',
+    '/correctivos/nuevo': 'Correctivos',
     '/history': 'Historial',
     '/settings': 'Ajustes',
     '/admin/dashboard': 'Admin',
