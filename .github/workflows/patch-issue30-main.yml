@@ -1,0 +1,58 @@
+name: Patch Issue 30 Main
+
+on:
+  push:
+    branches:
+      - feature/issue-30-correctivos-api
+    paths:
+      - .github/workflows/patch-issue30-main.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v6
+        with:
+          ref: feature/issue-30-correctivos-api
+          fetch-depth: 0
+
+      - name: Patch main.py and self-remove
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('backend/main.py')
+          text = path.read_text(encoding='utf-8-sig')
+
+          import_old = 'import models, schemas, database\n'
+          import_new = 'import models, schemas, database\nfrom correctivos_api import build_correctivos_router\n'
+          if text.count(import_old) != 1:
+              raise SystemExit(f'Import anchor count unexpected: {text.count(import_old)}')
+          text = text.replace(import_old, import_new, 1)
+
+          router_old = '# Include API router\napp.include_router(api_router)\n'
+          router_new = (
+              '# Correctivos/incidencias (#30)\n'
+              'api_router.include_router(build_correctivos_router(get_db, get_current_user))\n\n'
+              '# Include API router\n'
+              'app.include_router(api_router)\n'
+          )
+          if text.count(router_old) != 1:
+              raise SystemExit(f'Router anchor count unexpected: {text.count(router_old)}')
+          text = text.replace(router_old, router_new, 1)
+          path.write_text(text, encoding='utf-8')
+
+          Path('.github/workflows/patch-issue30-main.yml').unlink()
+          PY
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/main.py .github/workflows/patch-issue30-main.yml
+          git commit -m "feat(correctivos): registrar router API en main (#30)"
+          git push origin HEAD:feature/issue-30-correctivos-api
