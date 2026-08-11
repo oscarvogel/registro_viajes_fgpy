@@ -20,7 +20,6 @@ from correctivos import (
     CabOrdenServicioCorrectivo,
     CorrectivoCreate,
     CorrectivoError,
-    DetOrdenServicioCorrectivo,
     MonedaCorrectivo,
     RepuestoCorrectivo,
     SectorCorrectivo,
@@ -134,7 +133,7 @@ def build_correctivos_router(
         proveedores = (
             db.query(models.Proveedor)
             .filter(models.Proveedor.activo.is_(True))
-            .order_by(models.Proveedor.descripcion.asc())
+            .order_by(models.Proveedor.razon_social.asc())
             .all()
         )
         mecanicos = (
@@ -168,7 +167,7 @@ def build_correctivos_router(
                 for item in monedas
             ],
             "sectores": [_catalog_item(item) for item in sectores],
-            "proveedores": [_catalog_item(item) for item in proveedores],
+            "proveedores": [_catalog_item(item, "razon_social") for item in proveedores],
             "mecanicos": [_empleado_item(item) for item in mecanicos],
             "equipos": [_equipo_item(item) for item in equipos],
             "unidades_negocio": [_catalog_item(item) for item in unidades],
