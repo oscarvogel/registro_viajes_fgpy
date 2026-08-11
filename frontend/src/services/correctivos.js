@@ -1,6 +1,6 @@
 import axios from 'axios'
-import { API_URL } from '../config'
-import { findEquipoByPatente } from './criticalScreens'
+import { API_URL } from '../config.js'
+import { findEquipoByPatente } from './criticalScreens.js'
 
 export const createTrabajoVacio = () => ({
   tipo_tarea_id: '',
