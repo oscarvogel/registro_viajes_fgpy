@@ -1,0 +1,9 @@
+def test_app_principal_expone_rutas_correctivos():
+    import main
+
+    paths = set(main.app.openapi()["paths"])
+
+    assert "/api/correctivos/catalogos" in paths
+    assert "/api/correctivos" in paths
+    assert "/api/correctivos/{correctivo_id}" in paths
+    assert "/api/equipos/{equipo_id}/correctivos" in paths

@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Request
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Query, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -26,6 +26,7 @@ from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 import models, schemas, database
+from correctivos_api import build_correctivos_router
 from trip_service import create_trip
 from trip_image_service import TripImageService
 from fuel_image_service import FuelImageService
@@ -2300,6 +2301,9 @@ def get_app_version():
     release = os.getenv('SENTRY_RELEASE') or os.getenv('APP_VERSION') or os.getenv('RELEASE') or 'unknown'
     deployed_at = os.getenv('DEPLOYED_AT')  # optional env var set by deploy process
     return {"release": release, "deployed_at": deployed_at}
+
+# Correctivos/incidencias (#30)
+api_router.include_router(build_correctivos_router(get_db, get_current_user))
 
 # Include API router
 app.include_router(api_router)
