@@ -13,7 +13,7 @@ const actions = [
     color: 'border-amber-500',
   },
   {
-    to: '/correctivos/nuevo',
+    to: '/correctivos',
     title: 'Correctivos',
     description: 'Registrar incidencias, reparaciones y trabajos realizados.',
     color: 'border-rose-500',
