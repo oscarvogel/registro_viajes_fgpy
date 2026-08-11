@@ -1,32 +1,30 @@
-"""Núcleo de correctivos/incidencias sobre las órdenes de servicio legacy.
+"""Núcleo de correctivos/incidencias sobre órdenes de servicio legacy.
 
-Issue #27.
+Subissue #29 del issue #27.
 
-Este módulo encapsula el mapping mínimo de las tablas de mantenimiento ya
-existentes y la lógica transaccional para registrar trabajos correctivos desde
-la PWA sin crear un segundo historial paralelo.
-
-La integración HTTP se realiza en un paso separado para mantener el cambio
-revisable y no ampliar todavía más backend/main.py.
+Este módulo mantiene aislada la lógica de negocio de correctivos para que la
+integración HTTP del #30 no duplique reglas. Reutiliza las tablas existentes de
+mantenimiento y no crea un historial paralelo.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Iterable, Optional
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, or_
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, Time, or_
 from sqlalchemy.orm import Session, relationship
 
 import models
 from database import Base
 
 
-# Estados usados por el sistema FGPY existente (modelos/Mantenimientos.py y
-# controladores/RegistroOrdenServicio.py). Una carga rápida representa un
-# trabajo ya realizado y por eso se persiste cerrada.
 ESTADO_CERRADO = "Cerrado"
+
+
+class CorrectivoError(ValueError):
+    """Error de validación de negocio del módulo de correctivos."""
 
 
 class TipoTareaCorrectivo(Base):
@@ -119,9 +117,9 @@ class DetOrdenServicioCorrectivo(Base):
     moneda_id = Column(Integer, ForeignKey("monedas.id"), nullable=False)
     cambio = Column(Float, nullable=False, default=1.0)
     observaciones = Column(String(200), nullable=False, default="")
-    hora_inicio = Column(String(8), nullable=True)
-    hora_fin = Column(String(8), nullable=True)
-    horas_extras = Column(String(8), nullable=True)
+    hora_inicio = Column(Time, nullable=True)
+    hora_fin = Column(Time, nullable=True)
+    horas_extras = Column(Time, nullable=True)
     sector_id = Column(Integer, ForeignKey("sectores.id"), nullable=True)
 
     cabecera = relationship("CabOrdenServicioCorrectivo", back_populates="detalles")
@@ -130,36 +128,49 @@ class DetOrdenServicioCorrectivo(Base):
 
 
 class CorrectivoTrabajoCreate(BaseModel):
-    tipo_tarea_id: int
-    detalle: str = Field(min_length=1, max_length=4000)
-    repuesto_id: Optional[int] = None
-    cantidad: float = 0
-    precio_unitario: float = 0
-    observaciones: str = Field(default="", max_length=200)
-    mecanico_id: Optional[int] = None
-    sector_id: Optional[int] = None
+    model_config = ConfigDict(extra="forbid")
 
-    @field_validator("cantidad", "precio_unitario")
+    tipo_tarea_id: int = Field(gt=0)
+    detalle: str = Field(min_length=1, max_length=4000)
+    repuesto_id: Optional[int] = Field(default=None, gt=0)
+    cantidad: float = Field(default=0, ge=0)
+    precio_unitario: float = Field(default=0, ge=0)
+    observaciones: str = Field(default="", max_length=200)
+    mecanico_id: Optional[int] = Field(default=None, gt=0)
+    sector_id: Optional[int] = Field(default=None, gt=0)
+
+    @field_validator("detalle")
     @classmethod
-    def no_negativos(cls, value: float) -> float:
-        if value < 0:
-            raise ValueError("No puede ser negativo")
+    def detalle_no_vacio(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("El trabajo realizado no puede quedar vacío")
         return value
 
 
 class CorrectivoCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     fecha: date
-    equipo_id: int
+    equipo_id: int = Field(gt=0)
     km_hora: float = Field(ge=0)
     descripcion: str = Field(min_length=1, max_length=4000)
     externo: bool = False
-    proveedor_id: Optional[int] = None
-    mecanico_id: Optional[int] = None
-    unidad_negocio_id: int
-    moneda_id: int
+    proveedor_id: Optional[int] = Field(default=None, gt=0)
+    mecanico_id: Optional[int] = Field(default=None, gt=0)
+    unidad_negocio_id: int = Field(gt=0)
+    moneda_id: int = Field(gt=0)
     cambio: float = Field(default=1.0, gt=0)
     orden_servicio: str = Field(default="", max_length=12)
     trabajos: list[CorrectivoTrabajoCreate] = Field(min_length=1)
+
+    @field_validator("descripcion")
+    @classmethod
+    def descripcion_no_vacia(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("La incidencia no puede quedar vacía")
+        return value
 
 
 class CorrectivoCreado(BaseModel):
@@ -192,6 +203,17 @@ def _nombre_usuario(empleado: models.Empleado) -> str:
     return texto[:30]
 
 
+def _ids_activos(db: Session, model, ids: set[int]) -> set[int]:
+    if not ids:
+        return set()
+    return {
+        item.id
+        for item in db.query(model)
+        .filter(model.id.in_(ids), model.activo.is_(True))
+        .all()
+    }
+
+
 def _validar_catalogos(db: Session, payload: CorrectivoCreate) -> None:
     equipo = (
         db.query(models.Equipo)
@@ -199,7 +221,7 @@ def _validar_catalogos(db: Session, payload: CorrectivoCreate) -> None:
         .first()
     )
     if not equipo:
-        raise ValueError("Equipo inexistente o inactivo")
+        raise CorrectivoError("Equipo inexistente o inactivo")
 
     unidad = (
         db.query(models.UnidadNegocio)
@@ -210,7 +232,7 @@ def _validar_catalogos(db: Session, payload: CorrectivoCreate) -> None:
         .first()
     )
     if not unidad:
-        raise ValueError("Unidad de negocio inexistente o inactiva")
+        raise CorrectivoError("Unidad de negocio inexistente o inactiva")
 
     moneda = (
         db.query(MonedaCorrectivo)
@@ -218,41 +240,47 @@ def _validar_catalogos(db: Session, payload: CorrectivoCreate) -> None:
         .first()
     )
     if not moneda:
-        raise ValueError("Moneda inexistente o inactiva")
+        raise CorrectivoError("Moneda inexistente o inactiva")
 
     if payload.externo:
         if not payload.proveedor_id:
-            raise ValueError("Un correctivo externo requiere proveedor")
+            raise CorrectivoError("Un correctivo externo requiere proveedor")
         proveedor = (
             db.query(models.Proveedor)
             .filter(models.Proveedor.id == payload.proveedor_id, models.Proveedor.activo.is_(True))
             .first()
         )
         if not proveedor:
-            raise ValueError("Proveedor inexistente o inactivo")
+            raise CorrectivoError("Proveedor inexistente o inactivo")
 
     tarea_ids = {trabajo.tipo_tarea_id for trabajo in payload.trabajos}
-    tareas_validas = {
-        item.id
-        for item in db.query(TipoTareaCorrectivo)
-        .filter(TipoTareaCorrectivo.id.in_(tarea_ids), TipoTareaCorrectivo.activo.is_(True))
-        .all()
-    }
-    faltantes = tarea_ids - tareas_validas
-    if faltantes:
-        raise ValueError(f"Tipos de tarea inexistentes o inactivos: {sorted(faltantes)}")
+    faltantes_tareas = tarea_ids - _ids_activos(db, TipoTareaCorrectivo, tarea_ids)
+    if faltantes_tareas:
+        raise CorrectivoError(f"Tipos de tarea inexistentes o inactivos: {sorted(faltantes_tareas)}")
 
     repuesto_ids = {trabajo.repuesto_id for trabajo in payload.trabajos if trabajo.repuesto_id}
-    if repuesto_ids:
-        repuestos_validos = {
+    faltantes_repuestos = repuesto_ids - _ids_activos(db, RepuestoCorrectivo, repuesto_ids)
+    if faltantes_repuestos:
+        raise CorrectivoError(f"Repuestos inexistentes o inactivos: {sorted(faltantes_repuestos)}")
+
+    sector_ids = {trabajo.sector_id for trabajo in payload.trabajos if trabajo.sector_id}
+    faltantes_sectores = sector_ids - _ids_activos(db, SectorCorrectivo, sector_ids)
+    if faltantes_sectores:
+        raise CorrectivoError(f"Sectores inexistentes o inactivos: {sorted(faltantes_sectores)}")
+
+    mecanico_ids = {trabajo.mecanico_id for trabajo in payload.trabajos if trabajo.mecanico_id}
+    if payload.mecanico_id:
+        mecanico_ids.add(payload.mecanico_id)
+    if mecanico_ids:
+        mecanicos_validos = {
             item.id
-            for item in db.query(RepuestoCorrectivo)
-            .filter(RepuestoCorrectivo.id.in_(repuesto_ids), RepuestoCorrectivo.activo.is_(True))
+            for item in db.query(models.Empleado)
+            .filter(models.Empleado.id.in_(mecanico_ids), models.Empleado.activo.is_(True))
             .all()
         }
-        faltantes_repuestos = repuesto_ids - repuestos_validos
-        if faltantes_repuestos:
-            raise ValueError(f"Repuestos inexistentes o inactivos: {sorted(faltantes_repuestos)}")
+        faltantes_mecanicos = mecanico_ids - mecanicos_validos
+        if faltantes_mecanicos:
+            raise CorrectivoError(f"Mecánicos inexistentes o inactivos: {sorted(faltantes_mecanicos)}")
 
 
 def crear_correctivo(
@@ -260,10 +288,10 @@ def crear_correctivo(
     payload: CorrectivoCreate,
     current_user: models.Empleado,
 ) -> CorrectivoCreado:
-    """Crea cabecera + detalles correctivos en una única transacción.
+    """Crea cabecera + detalles en una única transacción.
 
-    El usuario siempre proviene de la sesión/JWT; el payload no permite enviar
-    un campo usuario. Una excepción provoca rollback y evita cabeceras huérfanas.
+    La identidad se recibe desde la capa autenticada. El contrato no admite
+    campos `usuario` ni `cerrado_por` y cualquier error revierte la operación.
     """
     _validar_catalogos(db, payload)
     usuario = _nombre_usuario(current_user)
@@ -272,11 +300,11 @@ def crear_correctivo(
         cabecera = CabOrdenServicioCorrectivo(
             fecha=payload.fecha,
             equipo_id=payload.equipo_id,
-            descripcion=payload.descripcion.strip(),
+            descripcion=payload.descripcion,
             estado=ESTADO_CERRADO,
             cerrado_por=usuario,
             externo=payload.externo,
-            proveedor=payload.proveedor_id or 0,
+            proveedor=(payload.proveedor_id or 0) if payload.externo else 0,
             mecanico=payload.mecanico_id or 0,
             unidad_negocio_id=payload.unidad_negocio_id,
             usuario=usuario,
@@ -303,7 +331,7 @@ def crear_correctivo(
                     realizado=True,
                     km_hora=payload.km_hora,
                     diferencia=0,
-                    detalle=trabajo.detalle.strip(),
+                    detalle=trabajo.detalle,
                     fecha_realizacion=payload.fecha,
                     mecanico=trabajo.mecanico_id or payload.mecanico_id or 0,
                     moneda_id=payload.moneda_id,
@@ -330,7 +358,10 @@ def listar_correctivos(
     texto: Optional[str] = None,
     limite: int = 100,
 ) -> list[CorrectivoHistorialItem]:
-    """Lista intervenciones que contienen al menos un detalle correctivo."""
+    """Lista intervenciones con al menos un detalle correctivo."""
+    if fecha_desde and fecha_hasta and fecha_desde > fecha_hasta:
+        raise CorrectivoError("Rango de fechas inválido")
+
     query = (
         db.query(CabOrdenServicioCorrectivo)
         .join(DetOrdenServicioCorrectivo)
@@ -343,7 +374,7 @@ def listar_correctivos(
         query = query.filter(CabOrdenServicioCorrectivo.fecha >= fecha_desde)
     if fecha_hasta is not None:
         query = query.filter(CabOrdenServicioCorrectivo.fecha <= fecha_hasta)
-    if texto:
+    if texto and texto.strip():
         patron = f"%{texto.strip()}%"
         query = query.filter(
             or_(
