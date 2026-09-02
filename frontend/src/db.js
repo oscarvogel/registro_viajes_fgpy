@@ -1,7 +1,9 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'registro_viajes_db';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
+
+export const OFFLINE_OPERATIONS_STORE = 'offlineOperations';
 
 export const dbPromise = openDB(DB_NAME, DB_VERSION, {
   upgrade(db) {
@@ -24,9 +26,14 @@ export const dbPromise = openDB(DB_NAME, DB_VERSION, {
         db.createObjectStore('clientes', { keyPath: 'id' });
     }
     if (!db.objectStoreNames.contains('registros')) {
-        // Local records not yet synced.
-        // We might want to use a separate store for synced history if we want to show it offline.
+        // Legacy local queue. Keep it intact while the generic offline queue is rolled out.
         db.createObjectStore('registros', { keyPath: 'local_id', autoIncrement: true });
+    }
+    if (!db.objectStoreNames.contains(OFFLINE_OPERATIONS_STORE)) {
+        const store = db.createObjectStore(OFFLINE_OPERATIONS_STORE, { keyPath: 'client_uuid' });
+        store.createIndex('by_status', 'status');
+        store.createIndex('by_entity_type', 'entity_type');
+        store.createIndex('by_created_at_local', 'created_at_local');
     }
   },
 });
@@ -35,7 +42,6 @@ export async function saveToStore(storeName, data) {
     const db = await dbPromise;
     const tx = db.transaction(storeName, 'readwrite');
     const store = tx.objectStore(storeName);
-    // If data is array, put all
     if (Array.isArray(data)) {
         await Promise.all(data.map(item => store.put(item)));
     } else {
