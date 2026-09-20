@@ -501,6 +501,19 @@ def read_clientes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)
 def read_equipos(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return db.query(models.Equipo).filter(models.Equipo.activo == True).offset(skip).limit(limit).all()
 
+
+@api_router.get("/predios", response_model=List[schemas.PredioCatalogo])
+def read_predios(skip: int = 0, limit: int = 10000, db: Session = Depends(get_db)):
+    """Devuelve predios activos para sincronizar al dispositivo móvil."""
+    return (
+        db.query(models.Predio)
+        .filter(models.Predio.activo == True)
+        .order_by(models.Predio.descripcion.asc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
 @api_router.get("/panioles", response_model=List[schemas.Paniol])
 def read_panioles(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return db.query(models.Paniol).filter(models.Paniol.activo == True).offset(skip).limit(limit).all()
