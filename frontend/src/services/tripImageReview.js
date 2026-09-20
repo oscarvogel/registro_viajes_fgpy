@@ -136,6 +136,12 @@ export const createReviewModel = (analysis, settings, today) => {
     equipo: equipmentSnapshot(settings?.equipo),
     unidadNegocio: unitSnapshot(settings?.unidadNegocio),
   })
+  const proposedClientId = positiveInteger(proposal.cliente_id)
+  const matchingPredios = Array.isArray(settings?.activePredios)
+    ? settings.activePredios.filter((item) => item.cliente_id === proposedClientId)
+    : []
+  const automaticPredioId = matchingPredios.length === 1 ? matchingPredios[0].id : null
+
   return {
     upload_token: analysis?.upload_token,
     fecha_remision: proposal.fecha_remision || '',
@@ -145,7 +151,7 @@ export const createReviewModel = (analysis, settings, today) => {
     cliente_candidato: proposal.cliente_candidato ?? null,
     proveedor_id: proposal.proveedor_id ?? null,
     proveedor_candidato: proposal.proveedor_candidato ?? null,
-    predio_id: null,
+    predio_id: automaticPredioId,
     peso_bruto_destino: formatWeight(proposal.peso_bruto_destino),
     tara_destino: formatWeight(proposal.tara_destino),
     neto_destino: formatWeight(proposal.neto_destino),
