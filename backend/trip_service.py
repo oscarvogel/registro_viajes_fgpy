@@ -96,20 +96,21 @@ def _catalogs(db, registro):
             db, models.Proveedor, registro.proveedor_id, "Proveedor"
         )
 
-    if registro.pesaje_unico:
-        if proveedor_id is None:
-            raise HTTPException(status_code=400, detail="Proveedor requerido")
-        cliente_id = _active_catalog_id(
-            db, models.Cliente, registro.cliente_id, "Cliente"
-        )
-    else:
-        cliente_id = _active_catalog_id(
-            db,
-            models.Cliente,
-            registro.cliente_id if registro.cliente_id is not None else 1,
-            "Cliente",
-        )
-    return proveedor_id, cliente_id
+    predio = db.query(models.Predio).filter(models.Predio.id == registro.predio_id).first()
+    if not predio or predio.activo is not True:
+        raise HTTPException(status_code=400, detail="Predio no encontrado")
+
+    if registro.cliente_id is not None and registro.cliente_id != predio.cliente_id:
+        raise HTTPException(status_code=400, detail="El predio no pertenece al cliente seleccionado")
+
+    cliente_id = _active_catalog_id(
+        db, models.Cliente, predio.cliente_id, "Cliente"
+    )
+
+    if registro.pesaje_unico and proveedor_id is None:
+        raise HTTPException(status_code=400, detail="Proveedor requerido")
+
+    return proveedor_id, cliente_id, predio.id
 
 
 def _weights(registro):
@@ -154,7 +155,7 @@ def _weights(registro):
     return origen_db, _quantize(bruto), _quantize(tara), _quantize(destino_neto), origen_db
 
 
-def _build_record(registro, employee, equipo, proveedor_id, cliente_id, weights):
+def _build_record(registro, employee, equipo, proveedor_id, cliente_id, predio_id, weights):
     neto_origen, bruto, tara, neto_destino, produccion = weights
     remito_proveedor = (registro.numero_remision or "").strip() or None
     remito_fgpy = (registro.numero_remision_fpv or "").strip() or None
@@ -163,7 +164,7 @@ def _build_record(registro, employee, equipo, proveedor_id, cliente_id, weights)
         produccion=produccion, remito=0, remito2=0,
         remito_proveedor=remito_proveedor, remito_fgpy=remito_fgpy,
         hora=datetime.now().time(), turno="dia", unidad_negocio_id=registro.unidad_negocio_id,
-        cliente_id=cliente_id, predio_id=1,
+        cliente_id=cliente_id, predio_id=predio_id,
         periodo=f"{registro.fecha_remision.year}{registro.fecha_remision.month:02d}",
         proveedor_id=proveedor_id, bruto_destino=bruto, tara_destino=tara,
         neto_origen=neto_origen, neto_destino=neto_destino, pesaje_unico=registro.pesaje_unico,
@@ -183,9 +184,9 @@ def create_trip(db: Session, registro, effective_user, commit=True):
     equipo = _equipment(db, registro.patente)
     set_request_context(chofer=f"{employee.apellido} {employee.nombre}")
     set_request_context(vehiculo=f"{equipo.patente} - {equipo.descripcion}")
-    proveedor_id, cliente_id = _catalogs(db, registro)
+    proveedor_id, cliente_id, predio_id = _catalogs(db, registro)
     record = _build_record(
-        registro, employee, equipo, proveedor_id, cliente_id, _weights(registro)
+        registro, employee, equipo, proveedor_id, cliente_id, predio_id, _weights(registro)
     )
     db.add(record)
     try:

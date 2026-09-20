@@ -57,6 +57,16 @@ class ClienteCatalogo(BaseModel):
     razon_social: str
     activo: bool
 
+# --- Predio ---
+class PredioCatalogo(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    descripcion: str
+    cliente_id: int
+    activo: bool
+    codigo_kobo: Optional[str] = None
+
 # --- Empleado (Chofer) Shared ---
 class EmpleadoBase(BaseModel):
     nombre: str
@@ -134,6 +144,7 @@ class RegistroViajeCreate(BaseModel):
     patente: str # Or equipo_id if we map it
     unidad_negocio_id: int = 1
     cliente_id: Optional[int] = None
+    predio_id: int
     
     observaciones: Optional[str] = None
 
@@ -201,6 +212,7 @@ class TripImageConfirmRequest(BaseModel):
     numero_remision_fpv: str = Field(pattern=r"^[0-9]{3}-[0-9]{3}-[0-9]{7}$")
     cliente_id: int
     proveedor_id: int
+    predio_id: int
     patente: str
     unidad_negocio_id: int
     peso_bruto_destino: float

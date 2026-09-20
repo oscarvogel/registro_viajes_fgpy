@@ -59,6 +59,13 @@ export const readTripImageSettings = ({ storage, catalog = {} }) => {
     .filter(active)
     .map((item) => positiveInteger(item.id))
     .filter(Boolean))
+  const activePredios = Object.freeze(list(catalog.predios)
+    .filter(active)
+    .map((item) => Object.freeze({
+      id: positiveInteger(item.id),
+      cliente_id: positiveInteger(item.cliente_id),
+    }))
+    .filter((item) => item.id && item.cliente_id))
   const missing = []
   if (!user) missing.push('user')
   if (!patente || !equipo) missing.push('patente')
@@ -73,6 +80,7 @@ export const readTripImageSettings = ({ storage, catalog = {} }) => {
     unidadNegocio,
     activeClientIds,
     activeProviderIds,
+    activePredios,
     missing: Object.freeze(missing),
     errors: Object.freeze(errors),
     complete: missing.length === 0,
@@ -128,6 +136,12 @@ export const createReviewModel = (analysis, settings, today) => {
     equipo: equipmentSnapshot(settings?.equipo),
     unidadNegocio: unitSnapshot(settings?.unidadNegocio),
   })
+  const proposedClientId = positiveInteger(proposal.cliente_id)
+  const matchingPredios = Array.isArray(settings?.activePredios)
+    ? settings.activePredios.filter((item) => item.cliente_id === proposedClientId)
+    : []
+  const automaticPredioId = matchingPredios.length === 1 ? matchingPredios[0].id : null
+
   return {
     upload_token: analysis?.upload_token,
     fecha_remision: proposal.fecha_remision || '',
@@ -137,6 +151,7 @@ export const createReviewModel = (analysis, settings, today) => {
     cliente_candidato: proposal.cliente_candidato ?? null,
     proveedor_id: proposal.proveedor_id ?? null,
     proveedor_candidato: proposal.proveedor_candidato ?? null,
+    predio_id: automaticPredioId,
     peso_bruto_destino: formatWeight(proposal.peso_bruto_destino),
     tara_destino: formatWeight(proposal.tara_destino),
     neto_destino: formatWeight(proposal.neto_destino),
@@ -195,6 +210,14 @@ export const buildConfirmPayload = (review, settings) => {
   if (!proveedorId || !Array.isArray(settings?.activeProviderIds) || !settings.activeProviderIds.includes(proveedorId)) {
     throw new TypeError('Seleccioná un proveedor activo válido.')
   }
+  const predioId = positiveInteger(review?.predio_id)
+  const predio = Array.isArray(settings?.activePredios)
+    ? settings.activePredios.find((item) => item.id === predioId)
+    : null
+  if (!predio) throw new TypeError('Seleccioná un predio activo válido.')
+  if (predio.cliente_id !== clienteId) {
+    throw new TypeError('El predio no pertenece al cliente seleccionado.')
+  }
   const uploadToken = typeof review?.upload_token === 'string' ? review.upload_token.trim() : ''
   if (!uploadToken) throw new TypeError('La imagen analizada ya no está disponible.')
   return {
@@ -204,6 +227,7 @@ export const buildConfirmPayload = (review, settings) => {
     numero_remision_fpv: review.numero_remision_fpv,
     cliente_id: clienteId,
     proveedor_id: proveedorId,
+    predio_id: predioId,
     patente: settings.patente,
     unidad_negocio_id: settings.unidadNegocioId,
     peso_bruto_destino: brutoM / 1000,
