@@ -129,6 +129,7 @@ class CreateTripServiceTest(unittest.TestCase):
             models.Empleado.__table__,
             models.Proveedor.__table__,
             models.Cliente.__table__,
+            models.Predio.__table__,
             models.Equipo.__table__,
             models.UnidadNegocio.__table__,
             models.TableroProduccion.__table__,
@@ -143,6 +144,7 @@ class CreateTripServiceTest(unittest.TestCase):
             self.models.Equipo,
             self.models.UnidadNegocio,
             self.models.Proveedor,
+            self.models.Predio,
             self.models.Cliente,
             self.models.Empleado,
         ):
@@ -156,12 +158,13 @@ class CreateTripServiceTest(unittest.TestCase):
         )
         self.provider = self.models.Proveedor(id=20, razon_social="Proveedor", activo=True)
         self.client = self.models.Cliente(id=1, razon_social="Cliente", activo=True)
+        self.predio = self.models.Predio(id=40, descripcion="Yegros", cliente_id=1, activo=True)
         self.unit = self.models.UnidadNegocio(id=3, descripcion="Transporte", activo=True)
         self.equipment = self.models.Equipo(
             id=30, descripcion="Camion", patente="AA 123 BB", nro_chasis="c",
             nro_motor="m", tipo_movil_id=1, activo=True, movil_asociado=0, ult_hr_km=0,
         )
-        self.db.add_all([self.employee, self.provider, self.client, self.unit, self.equipment])
+        self.db.add_all([self.employee, self.provider, self.client, self.predio, self.unit, self.equipment])
         self.db.commit()
 
     def tearDown(self):
@@ -173,7 +176,7 @@ class CreateTripServiceTest(unittest.TestCase):
             proveedor_id=20, numero_remision="R-1", numero_remision_fpv="F-1",
             peso_bruto_origen=48.5, tara_origen=16.5, neto_origen=32.0,
             peso_bruto_destino=49.690, tara_destino=17.080, neto_destino=32.610,
-            chofer_id=10, patente="aa123bb", unidad_negocio_id=3, cliente_id=1,
+            chofer_id=10, patente="aa123bb", unidad_negocio_id=3, cliente_id=1, predio_id=40,
             observaciones="ok", pesaje_unico=False,
         )
         values.update(overrides)
@@ -420,13 +423,14 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         root = tempfile.TemporaryDirectory(); self.addCleanup(root.cleanup)
         storage = ImageStorage(Path(root.name).resolve(), "x" * 32, temporary_ttl=__import__('datetime').timedelta(hours=1), now=(lambda: clock[0]) if clock else None)
         engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-        for table in (models.Empleado.__table__, models.Cliente.__table__, models.Proveedor.__table__, models.Equipo.__table__, models.UnidadNegocio.__table__, models.TableroProduccion.__table__, models.ViajeImagen.__table__):
+        for table in (models.Empleado.__table__, models.Cliente.__table__, models.Predio.__table__, models.Proveedor.__table__, models.Equipo.__table__, models.UnidadNegocio.__table__, models.TableroProduccion.__table__, models.ViajeImagen.__table__):
             table.create(engine)
         db = sessionmaker(bind=engine)()
         user = models.Empleado(id=10, nombre="Ana", apellido="Perez", email="a@x", documento="1", fecha_contratacion=date(2020,1,1), activo=True, porcentaje=0)
         db.add_all([
             user,
             models.Cliente(id=21, razon_social="Alcogreen", activo=True),
+            models.Predio(id=41, descripcion="Yegros", cliente_id=21, activo=True),
             models.Proveedor(id=20, razon_social="Forestal Paraguay", activo=True),
             models.UnidadNegocio(id=3, descripcion="Transporte", activo=True),
             models.Equipo(id=30, descripcion="Camion", patente="ABC123", nro_chasis="c", nro_motor="m", tipo_movil_id=1, activo=True, movil_asociado=0, ult_hr_km=0),
@@ -434,7 +438,7 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         saved = storage.save_temp(b"\xff\xd8\xffdata", "ticket.jpg", "image/jpeg")
         request = schemas.TripImageConfirmRequest(
             upload_token=saved.token, fecha_remision=date(2026,7,13), fecha_recepcion=date(2026,7,13),
-            numero_remision_fpv="002-003-0003677", cliente_id=21, proveedor_id=20, patente="ABC123",
+            numero_remision_fpv="002-003-0003677", cliente_id=21, proveedor_id=20, predio_id=41, patente="ABC123",
             unidad_negocio_id=3, peso_bruto_destino=49.690, tara_destino=17.080,
             neto_destino=32.610, observaciones="revisado",
         )
@@ -494,7 +498,7 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             TripImageConfirmRequest(
                 upload_token="x", fecha_remision=date(2026,7,13), fecha_recepcion=date(2026,7,13),
-                numero_remision_fpv="002-003-0003677", cliente_id=1, proveedor_id=1, patente="ABC",
+                numero_remision_fpv="002-003-0003677", cliente_id=1, proveedor_id=1, predio_id=1, patente="ABC",
                 unidad_negocio_id=1, peso_bruto_destino=2, tara_destino=1,
                 neto_destino=1, chofer_id=999,
             )
@@ -509,13 +513,14 @@ class TripImageEndpointServiceTest(unittest.TestCase):
             "numero_remision_fpv": "002-003-0003755",
             "cliente_id": 21,
             "proveedor_id": 20,
+            "predio_id": 41,
             "patente": "ABC123",
             "unidad_negocio_id": 3,
             "peso_bruto_destino": 48.250,
             "tara_destino": 16.460,
             "neto_destino": 31.790,
         }
-        for missing in ("cliente_id", "proveedor_id"):
+        for missing in ("cliente_id", "proveedor_id", "predio_id"):
             payload = dict(valid)
             payload.pop(missing)
             with self.subTest(missing=missing), self.assertRaises(ValueError):
@@ -533,6 +538,7 @@ class TripImageEndpointServiceTest(unittest.TestCase):
         self.assertEqual(trip.empleado_id, user.id)
         self.assertEqual(trip.cliente_id, 21)
         self.assertEqual(trip.proveedor_id, 20)
+        self.assertEqual(trip.predio_id, 41)
         self.assertTrue(trip.pesaje_unico)
         self.assertEqual(trip.neto_origen, Decimal("0.00"))
         self.assertEqual(trip.bruto_destino, Decimal("49.69"))
