@@ -18,6 +18,7 @@ const form = ref({
     fecha_recepcion: new Date().toISOString().split('T')[0],
     proveedor_id: '',
     cliente_id: '',
+    predio_id: '',
     remito_prov_tipo: '',
     remito_prov_sucursal: '',
     remito_prov_numero: '',
@@ -83,6 +84,19 @@ watch(isTC, (newIsTC, oldIsTC) => {
     if (oldIsTC !== undefined && newIsTC !== oldIsTC) {
         form.value.cliente_id = '';
         form.value.proveedor_id = '';
+        form.value.predio_id = '';
+    }
+});
+
+const prediosDisponibles = computed(() => {
+    const activos = catalog.predios.filter((p) => p.activo === true);
+    if (!form.value.cliente_id) return activos;
+    return activos.filter((p) => p.cliente_id === Number(form.value.cliente_id));
+});
+
+watch(() => form.value.cliente_id, () => {
+    if (form.value.predio_id && !prediosDisponibles.value.some((p) => p.id === Number(form.value.predio_id))) {
+        form.value.predio_id = '';
     }
 });
 
@@ -117,7 +131,7 @@ const submitForm = async () => {
     const needProveedor = !isTC.value;
     const needCliente = isTC.value;
 
-    if ((needProveedor && !form.value.proveedor_id) || (needCliente && !form.value.cliente_id) || !form.value.chofer_id || !form.value.patente || !form.value.neto_origen || !form.value.neto_destino) {
+    if ((needProveedor && !form.value.proveedor_id) || (needCliente && !form.value.cliente_id) || !form.value.predio_id || !form.value.chofer_id || !form.value.patente || !form.value.neto_origen || !form.value.neto_destino) {
         Swal.fire({
             icon: 'warning',
             title: 'Faltan datos',
@@ -321,6 +335,14 @@ const submitForm = async () => {
                 />
             </template>
         </div>
+
+        <Autocomplete
+            label="Predio"
+            :items="prediosDisponibles"
+            v-model="form.predio_id"
+            :displayFn="(p) => p.descripcion"
+            placeholder="Buscar predio..."
+        />
 
         <div>
             <label class="block text-xs font-medium text-gray-500 mb-1">Nº Remito Proveedor</label>
