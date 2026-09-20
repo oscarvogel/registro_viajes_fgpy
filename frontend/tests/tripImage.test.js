@@ -287,7 +287,7 @@ test('buildConfirmPayload validates dates, remito, provider, config, positive we
     { ...settings, activeProviderIds: [], complete: true },
     { ...settings, activePredios: [], complete: true },
     { ...settings, user: { ...settings.user, activo: false }, complete: true },
-  ]) assert.throws(() => buildConfirmPayload(valid, fake), /configuración|cliente|proveedor/i)
+  ]) assert.throws(() => buildConfirmPayload(valid, fake), /configuración|cliente|proveedor|predio/i)
 })
 
 test('buildConfirmPayload trims token and rejects blank or unauthorized provider', () => {
