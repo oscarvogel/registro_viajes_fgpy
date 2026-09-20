@@ -204,6 +204,7 @@ class CreateTripServiceTest(unittest.TestCase):
         self.assertTrue(row.pesaje_unico)
         self.assertEqual(row.cliente_id, 1)
         self.assertEqual(row.proveedor_id, 20)
+        self.assertEqual(row.predio_id, 40)
 
     def test_normal_rechaza_origen_no_positivo_y_produce_desde_origen(self):
         self.assert_bad_request(neto_origen=0)
