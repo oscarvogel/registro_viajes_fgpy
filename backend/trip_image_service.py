@@ -106,6 +106,7 @@ class TripImageService:
                 fecha_remision=request.fecha_remision, fecha_recepcion=request.fecha_recepcion,
                 proveedor_id=request.proveedor_id, numero_remision="",
                 numero_remision_fpv=request.numero_remision_fpv, cliente_id=request.cliente_id,
+                predio_id=request.predio_id,
                 chofer_id=current_user.id, patente=request.patente,
                 unidad_negocio_id=request.unidad_negocio_id, pesaje_unico=True,
                 peso_bruto_origen=0, tara_origen=0, neto_origen=0,
