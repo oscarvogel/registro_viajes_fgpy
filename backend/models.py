@@ -86,6 +86,17 @@ class Cliente(Base):
     activo = Column(Boolean, nullable=False, default=True)
     observaciones = Column(Text)
 
+class Predio(Base):
+    __tablename__ = "predios"
+
+    id = Column(Integer, primary_key=True, index=True)
+    descripcion = Column(String(100), nullable=False, unique=True)
+    cliente_id = Column(Integer, ForeignKey("cliente.id"), nullable=False)
+    activo = Column(Boolean, default=True)
+    codigo_kobo = Column(String(50))
+    cliente = relationship("Cliente")
+
+
 class Equipo(Base):
     __tablename__ = "equipos" # Camiones
 
@@ -164,7 +175,8 @@ class TableroProduccion(Base):
     proveedor_id = Column(Integer, ForeignKey("proveedor.id"), nullable=True)
     proveedor = relationship("Proveedor")
     plantas = Column(Integer, nullable=False, default=0)
-    predio_id = Column(Integer, nullable=False)
+    predio_id = Column(Integer, ForeignKey("predios.id"), nullable=False)
+    predio = relationship("Predio")
     hrs_no_operativas = Column(Integer, nullable=False, default=0)
     carga_piso = Column(Integer, nullable=False, default=0)
     tipo_operacion_id = Column(Integer, nullable=False, default=1)
