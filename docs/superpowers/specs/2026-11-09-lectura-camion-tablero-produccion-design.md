@@ -96,7 +96,8 @@ Default `'km'` porque es el caso mayoritario y no rompe nada si nadie lo ajusta.
 ### Backend (autoritativo)
 
 1. Si `lectura_camion` viene en el payload:
-   - Debe ser numérico y `> 0`. Rechazo 400.
+   - Debe ser numérico y `> 0`. Un valor `<= 0` se rechaza con 400. Un valor no
+     numérico lo rechaza el schema de Pydantic con 422 antes de llegar al servicio.
    - La unidad se resuelve desde `equipos.unidad_hr_km` del equipo resuelto por
      patente. El cliente no manda la unidad.
    - Se busca la última lectura del mismo `equipo_id` con la **misma**
@@ -209,7 +210,8 @@ que `backend/test_admin_dashboard.py`):
 - Lee una lectura menor a la anterior: 400 con el detalle del valor anterior.
 - Lee una lectura menor con `permitir_lectura_menor`: OK.
 - Payload sin `lectura_camion`: OK, se guarda NULL.
-- Valor no numérico o `<= 0`: 400.
+- Valor `<= 0`: 400. (Un valor no numérico lo rechaza el schema de Pydantic con
+  422 antes de llegar al servicio.)
 - Unidad distinta: no compara contra la lectura de otra unidad.
 - La comparación ignora viajes de carretón (`tabla='movimiento_carreton'`) y viajes
   OCR (sin lectura).
