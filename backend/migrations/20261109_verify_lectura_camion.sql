@@ -19,6 +19,11 @@ SELECT COUNT(*) AS filas_con_lectura
   FROM tablero_produccion
  WHERE lectura_camion IS NOT NULL;
 
-SELECT COUNT(*) AS equipos_sin_unidad
+SELECT COUNT(*) AS equipos_con_unidad_invalida
   FROM equipos
- WHERE unidad_hr_km IS NULL OR unidad_hr_km NOT IN ('km', 'hs');
+ WHERE unidad_hr_km NOT IN ('km', 'hs');
+
+SELECT COUNT(*) AS lecturas_inconsistentes
+  FROM tablero_produccion
+ WHERE (lectura_camion IS NOT NULL AND (unidad_lectura IS NULL OR unidad_lectura NOT IN ('km', 'hs')))
+    OR (lectura_camion IS NULL AND unidad_lectura IS NOT NULL);

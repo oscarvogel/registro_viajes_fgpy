@@ -5,8 +5,8 @@
 
 DELIMITER $$
 
-DROP PROCEDURE IF EXISTS add_lectura_camion$$
-CREATE PROCEDURE add_lectura_camion()
+DROP PROCEDURE IF EXISTS migrate_lectura_camion$$
+CREATE PROCEDURE migrate_lectura_camion()
 BEGIN
     IF NOT EXISTS (
         SELECT 1
@@ -42,7 +42,7 @@ BEGIN
     END IF;
 END$$
 
-CALL add_lectura_camion()$$
-DROP PROCEDURE add_lectura_camion$$
+CALL migrate_lectura_camion()$$
+DROP PROCEDURE migrate_lectura_camion$$
 
 DELIMITER ;

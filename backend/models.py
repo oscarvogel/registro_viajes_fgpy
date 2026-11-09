@@ -105,7 +105,7 @@ class Equipo(Base):
     ult_hr_km = Column(DECIMAL(10, 2), nullable=False, default=0.0)
     # Unidad de la lectura del tablero del camion: 'km' o 'hs'.
     # Default 'km' para que los equipos existentes no cambien de unidad.
-    unidad_hr_km = Column(String(3), nullable=False, default="km")
+    unidad_hr_km = Column(String(3), nullable=False, default="km", server_default="km")
 
 class UnidadNegocio(Base):
     __tablename__ = "unidades_negocio"
