@@ -26,7 +26,7 @@ from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 import models, schemas, database
-from trip_service import create_trip
+from trip_service import create_trip, ultima_lectura, unidad_de_equipo
 from trip_image_service import TripImageService
 from fuel_image_service import FuelImageService
 from image_storage import (ImageStorage, ImageStorageError, ImageStorageConfigError,
@@ -458,6 +458,19 @@ def require_admin_user(current_user: models.Empleado = Depends(get_current_user)
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No autorizado")
     return current_user
 
+def leer_flag_exigir_lectura_camion() -> bool:
+    """Elige si el formulario exige la lectura del camion.
+
+    Variable de entorno VIAJE_EXIGIR_LECTURA_CAMION, default true.
+    Permite relajar la exigencia en produccion sin redesplegar.
+
+    Se lee en cada llamada (no es una constante de modulo) porque el frontend
+    consulta el flag en cada carga de la pantalla del viaje.
+    """
+    valor = os.getenv("VIAJE_EXIGIR_LECTURA_CAMION", "true").strip().lower()
+    return valor not in ("0", "false", "no", "off")
+
+
 # --- Endpoints ---
 
 @app.get("/")
@@ -592,9 +605,39 @@ def read_historial_viajes(
             "remito_proveedor": tablero.remito_proveedor,
             "remito_fgpy": tablero.remito_fgpy,
             "observaciones": tablero.observaciones,
+            "lectura_camion": float(tablero.lectura_camion) if tablero.lectura_camion is not None else None,
+            "unidad_lectura": tablero.unidad_lectura,
         })
 
     return result
+
+@api_router.get("/registro-viaje/ultima-lectura")
+def read_ultima_lectura_camion(
+    equipo_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.Empleado = Depends(get_current_user),
+):
+    """Ultima lectura de km o hs del camion, para precargar el formulario.
+
+    La unidad la define el admin por camion (equipos.unidad_hr_km) y la
+    resuelve el servidor. Si el equipo todavia no tiene viajes con lectura
+    devuelve null.
+    """
+    equipo = db.query(models.Equipo).filter(models.Equipo.id == equipo_id).first()
+    if equipo is None:
+        raise HTTPException(status_code=404, detail="Movil no encontrado")
+
+    unidad = unidad_de_equipo(equipo)
+    anterior = ultima_lectura(db, equipo_id, unidad)
+    if anterior is None:
+        return None
+
+    return {
+        "equipo_id": equipo_id,
+        "lectura_camion": float(anterior.lectura_camion),
+        "unidad_lectura": anterior.unidad_lectura,
+        "fecha": str(anterior.fecha),
+    }
 
 @api_router.post("/login/")
 @api_router.post("/login")
@@ -2299,7 +2342,11 @@ def get_app_version():
     """Devuelve la versiÃ³n/release del backend y opcional informaciÃ³n para que el cliente sepa si debe actualizar/sincronizar."""
     release = os.getenv('SENTRY_RELEASE') or os.getenv('APP_VERSION') or os.getenv('RELEASE') or 'unknown'
     deployed_at = os.getenv('DEPLOYED_AT')  # optional env var set by deploy process
-    return {"release": release, "deployed_at": deployed_at}
+    return {
+        "release": release,
+        "deployed_at": deployed_at,
+        "exigir_lectura_camion": leer_flag_exigir_lectura_camion(),
+    }
 
 # Include API router
 app.include_router(api_router)

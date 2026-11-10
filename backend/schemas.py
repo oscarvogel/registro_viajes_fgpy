@@ -83,6 +83,9 @@ class EquipoBase(BaseModel):
     descripcion: str
     patente: str
     tipo_movil_id: int
+    # Unidad de la lectura del tablero del camion: 'km' o 'hs'. La define el
+    # admin; el cliente nunca la manda.
+    unidad_hr_km: str = "km"
 
 class Equipo(EquipoBase):
     model_config = ConfigDict(from_attributes=True)
@@ -136,6 +139,13 @@ class RegistroViajeCreate(BaseModel):
     cliente_id: Optional[int] = None
     
     observaciones: Optional[str] = None
+
+    # Lectura acumulada del odometro/horometro del camion.
+    # Opcional a proposito: el backend tolera el payload ausente (app vieja,
+    # viajes offline pendientes) y guarda NULL.
+    lectura_camion: Optional[float] = None
+    # Permite guardar una lectura menor a la anterior, con confirmacion del chofer.
+    permitir_lectura_menor: bool = False
 
     @field_validator(
         'peso_bruto_origen', 'tara_origen', 'neto_origen',
@@ -357,6 +367,8 @@ class HistorialViajeItem(BaseModel):
     remito_proveedor: Optional[str] = None
     remito_fgpy: Optional[str] = None
     observaciones: Optional[str] = None
+    lectura_camion: Optional[float] = None
+    unidad_lectura: Optional[str] = None
 
 # --- Movimiento de Combustible ---
 class MovimientoCombustibleCreate(BaseModel):
