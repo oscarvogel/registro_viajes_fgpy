@@ -1,4 +1,9 @@
-fastapi
+# fastapi y starlette van pineados a proposito: desde fastapi 0.162 cambia la
+# forma de exponer app.routes tras include_router (las rutas quedan anidadas en
+# vez de planas) y con eso se rompe el registro de rutas de la API. No quitar
+# el pin sin correr la suite completa del backend.
+fastapi==0.115.0
+starlette==0.38.6
 uvicorn
 sqlalchemy
 mysql-connector-python
