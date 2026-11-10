@@ -307,6 +307,98 @@ Para verificar el documento de referencia sin escribir en producción:
 
 La lectura de referencia no debe consultar ni escribir una base de producción.
 
+### Lectura de km/horas del camión en los viajes
+
+El formulario **Nuevo Registro** pide la lectura del odómetro (km) o del
+horómetro (horas) del camión y la guarda en `tablero_produccion.lectura_camion`,
+con la unidad en `unidad_lectura`.
+
+- La unidad es **fija por camión** y la define el admin en `equipos.unidad_hr_km`
+  (`'km'` o `'hs'`). El cliente nunca manda la unidad: el backend la resuelve
+  desde el equipo y la graba como snapshot, así corregir la unidad de un camión
+  no reescribe los viajes históricos.
+- `lectura_camion` es nullable: `NULL` significa "sin lectura registrada".
+- La referencia de monotonía es el último viaje del mismo equipo **con la misma
+  unidad**. Si el admin cambia la unidad, la comparación se desactiva en vez de
+  comparar números sin sentido.
+- Si la lectura es menor a la anterior, el backend la rechaza con 400. El chofer
+  puede confirmar con "Guardar igual", que viaja como `permitir_lectura_menor`.
+- El backend **tolera** el payload sin `lectura_camion`: se guarda `NULL`. Esto
+  cubre la app vieja y los viajes offline pendientes de la versión anterior.
+
+#### Interruptor
+
+`VIAJE_EXIGIR_LECTURA_CAMION` (default `true`) gobierna si el formulario exige la
+lectura. Con `false` el campo pasa a opcional, para el caso de un camión que no
+reporta odómetro. El valor viaja en `GET /api/app-version` como
+`exigir_lectura_camion`, y el frontend lo cachea para funcionar offline.
+
+```bash
+VIAJE_EXIGIR_LECTURA_CAMION=true
+```
+
+#### Migración MySQL
+
+**Aplicar la migración ANTES de desplegar el backend.** El backend nuevo
+selecciona `lectura_camion` y `unidad_lectura` en cada viaje y falla con
+`OperationalError` si las columnas no existen.
+
+```bash
+set -Eeuo pipefail
+umask 077
+
+: "${DB_NAME:?Definir DB_NAME}"
+: "${MYSQL_CNF:?Definir MYSQL_CNF con ruta absoluta}"
+: "${BACKUP_DIR:?Definir BACKUP_DIR con ruta absoluta}"
+[[ "$DB_NAME" =~ ^[A-Za-z0-9_]+$ ]]
+[[ "$MYSQL_CNF" = /* && -r "$MYSQL_CNF" ]]
+[[ "$BACKUP_DIR" = /* ]]
+install -d -m 0700 -- "$BACKUP_DIR"
+
+BACKUP="$(mktemp --tmpdir="$BACKUP_DIR" "pre-lectura-camion-${DB_NAME}-$(date +%Y%m%d-%H%M%S)-XXXXXX.sql")"
+cleanup_pre_migration() {
+    status=$?; trap - ERR INT TERM HUP
+    rm -f -- "$BACKUP"
+    (( status != 0 )) || status=1
+    exit "$status"
+}
+trap cleanup_pre_migration ERR INT TERM HUP
+
+mysqldump --defaults-extra-file="$MYSQL_CNF" --single-transaction --routines --triggers --events --databases "$DB_NAME" > "$BACKUP"
+[[ -s "$BACKUP" ]]
+sync -f "$BACKUP"
+trap - ERR INT TERM HUP
+
+mysql --defaults-extra-file="$MYSQL_CNF" "$DB_NAME" < backend/migrations/20261109_add_lectura_camion.sql
+mysql --defaults-extra-file="$MYSQL_CNF" --table "$DB_NAME" < backend/migrations/20261109_verify_lectura_camion.sql
+printf 'Backup previo: %s\n' "$BACKUP"
+```
+
+La migración es idempotente. La verificación es de solo lectura y debe mostrar:
+
+- `tablero_produccion.lectura_camion` nullable DECIMAL;
+- `tablero_produccion.unidad_lectura` nullable VARCHAR(3);
+- `equipos.unidad_hr_km` NOT NULL con default `km`;
+- cero filas con lectura no nula y cero equipos con unidad inválida.
+
+#### Configurar la unidad de un camión
+
+No hay pantalla de administración de equipos: se ajusta por SQL.
+
+```sql
+UPDATE equipos SET unidad_hr_km = 'hs' WHERE id = 12;
+UPDATE equipos SET unidad_hr_km = 'km' WHERE id = 13;
+```
+
+#### Verificación
+
+```powershell
+py -m pytest backend/test_trip_lectura_camion.py -q
+py -m pytest backend -q
+Set-Location frontend
+npm run verify
+```
+
 ### Carga de combustible desde imagen (OCR)
 
 El flujo **Cargar desde foto** de Combustible acepta dos tipos de comprobante: tickets de estación (INFONET/Petrobras/Lider Express) y remitos internos de Forestal Paraguay. La imagen se guarda con la misma evidencia de 60 días que `viaje_imagenes`. El chofer elige el tipo antes de abrir la cámara, escanea la foto y revisa/edita los campos detectados antes de confirmar.

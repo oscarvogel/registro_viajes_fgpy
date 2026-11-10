@@ -130,6 +130,25 @@ test('buildViajePayload incluye la lectura normalizada y el permiso de lectura m
   assert.equal(payload.patente, 'ABC123')
 })
 
+test('el historial muestra la lectura de cada viaje', async () => {
+  const history = await read('../src/views/History.vue')
+  assert.match(history, /item\.lectura_camion/)
+  assert.match(history, /item\.unidad_lectura/)
+})
+
+test('el historial usa la etiqueta amable de la unidad y no la unidad cruda', async () => {
+  const history = await read('../src/views/History.vue')
+  assert.match(history, /toUnidadLecturaLabel\(item\.unidad_lectura\)/)
+  assert.doesNotMatch(history, /'hs'/)
+  assert.doesNotMatch(history, /"hs"/)
+})
+
+test('el historial no muestra la linea de lectura cuando el viaje no tiene lectura', async () => {
+  const history = await read('../src/views/History.vue')
+  assert.match(history, /item\.lectura_camion !== null/)
+  assert.match(history, /item\.lectura_camion !== undefined/)
+  assert.match(history, /toFixed\(2\)/)
+})
 
 test('buildViajePayload omite la lectura cuando no es valida y tolera el flag ausente', () => {
   const payload = buildViajePayload({

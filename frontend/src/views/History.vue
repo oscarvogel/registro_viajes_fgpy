@@ -5,6 +5,7 @@ import Swal from 'sweetalert2';
 import axios from 'axios';
 import { useSyncStore } from '../stores/sync';
 import { API_URL } from '../config';
+import { toUnidadLecturaLabel } from '../services/criticalScreens.js';
 
 const syncStore = useSyncStore();
 const catalog = useCatalogStore();
@@ -302,6 +303,9 @@ const confirmRemove = async (record) => {
             </div>
             <div v-if="item.remito_fgpy" class="text-xs text-gray-400 mt-2">Remito FGPY: {{ item.remito_fgpy }}</div>
             <div v-if="item.observaciones" class="text-xs text-gray-400 mt-1">{{ item.observaciones }}</div>
+            <div v-if="item.lectura_camion !== null && item.lectura_camion !== undefined" class="text-xs text-gray-400 mt-1">
+                Lectura: {{ Number(item.lectura_camion).toFixed(2) }} {{ toUnidadLecturaLabel(item.unidad_lectura) }}
+            </div>
         </div>
     </div>
     <div v-else class="space-y-3">
