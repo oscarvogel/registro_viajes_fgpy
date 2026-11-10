@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Request
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import Query, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -26,6 +26,7 @@ from sentry_sdk.integrations.starlette import StarletteIntegration
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 import models, schemas, database
+from correctivos_api import build_correctivos_router
 from trip_service import create_trip, ultima_lectura, unidad_de_equipo
 from trip_image_service import TripImageService
 from fuel_image_service import FuelImageService
@@ -512,6 +513,19 @@ def read_clientes(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)
 @api_router.get("/equipos", response_model=List[schemas.Equipo])
 def read_equipos(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     return db.query(models.Equipo).filter(models.Equipo.activo == True).offset(skip).limit(limit).all()
+
+
+@api_router.get("/predios", response_model=List[schemas.PredioCatalogo])
+def read_predios(skip: int = 0, limit: int = 10000, db: Session = Depends(get_db)):
+    """Devuelve predios activos para sincronizar al dispositivo móvil."""
+    return (
+        db.query(models.Predio)
+        .filter(models.Predio.activo == True)
+        .order_by(models.Predio.descripcion.asc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 @api_router.get("/panioles", response_model=List[schemas.Paniol])
 def read_panioles(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
@@ -2347,6 +2361,9 @@ def get_app_version():
         "deployed_at": deployed_at,
         "exigir_lectura_camion": leer_flag_exigir_lectura_camion(),
     }
+
+# Correctivos/incidencias (#30)
+api_router.include_router(build_correctivos_router(get_db, get_current_user))
 
 # Include API router
 app.include_router(api_router)

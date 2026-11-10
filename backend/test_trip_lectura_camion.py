@@ -267,6 +267,11 @@ class LecturaCamionBaseTest(unittest.TestCase):
         )
         self.cliente = self.models.Cliente(id=1, razon_social="Alcogreen", activo=True)
         self.proveedor = self.models.Proveedor(id=1, razon_social="Forestal Paraguay", activo=True)
+        # El predio es obligatorio en el contrato de viajes: la unidad de
+        # negocio y el cliente se derivan de el.
+        self.predio = self.models.Predio(
+            id=1, descripcion="Predio Principal", cliente_id=1, activo=True,
+        )
         self.equipo_km = self.models.Equipo(
             id=10, descripcion="Scania", patente="ABC123", nro_chasis="CH10",
             nro_motor="MO10", tipo_movil_id=1, movil_asociado=0, activo=True,
@@ -277,7 +282,10 @@ class LecturaCamionBaseTest(unittest.TestCase):
             nro_motor="MO11", tipo_movil_id=1, movil_asociado=0, activo=True,
             ult_hr_km=0, unidad_hr_km="hs",
         )
-        self.db.add_all([self.empleado, self.unidad, self.cliente, self.proveedor, self.equipo_km, self.equipo_hs])
+        self.db.add_all([
+            self.empleado, self.unidad, self.cliente, self.proveedor, self.predio,
+            self.equipo_km, self.equipo_hs,
+        ])
         self.db.commit()
 
     @staticmethod
@@ -303,6 +311,7 @@ class LecturaCamionBaseTest(unittest.TestCase):
             fecha_recepcion=date(2026, 11, 9),
             proveedor_id=1,
             cliente_id=1,
+            predio_id=1,
             numero_remision=numero_remision,
             numero_remision_fpv=numero_remision_fpv,
             peso_bruto_origen=50.0,

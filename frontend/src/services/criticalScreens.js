@@ -188,6 +188,7 @@ export const buildViajePayload = ({ form, userId, lecturaCamion, permitirLectura
     fecha_recepcion: form.fecha_recepcion,
     proveedor_id: form.proveedor_id,
     cliente_id: form.cliente_id,
+    predio_id: Number(form.predio_id),
     numero_remision: combineRemito(form.remito_prov_tipo, form.remito_prov_sucursal, form.remito_prov_numero),
     numero_remision_fpv: combineRemito(form.remito_fpv_tipo, form.remito_fpv_sucursal, form.remito_fpv_numero),
     lote: form.lote,

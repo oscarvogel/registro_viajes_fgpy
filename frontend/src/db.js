@@ -1,7 +1,7 @@
 import { openDB } from 'idb';
 
 const DB_NAME = 'registro_viajes_db';
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 
 export const dbPromise = openDB(DB_NAME, DB_VERSION, {
   upgrade(db) {
@@ -22,6 +22,9 @@ export const dbPromise = openDB(DB_NAME, DB_VERSION, {
     }
     if (!db.objectStoreNames.contains('clientes')) {
         db.createObjectStore('clientes', { keyPath: 'id' });
+    }
+    if (!db.objectStoreNames.contains('predios')) {
+        db.createObjectStore('predios', { keyPath: 'id' });
     }
     if (!db.objectStoreNames.contains('registros')) {
         // Local records not yet synced.

@@ -21,6 +21,10 @@ const mocks = vi.hoisted(() => ({
       { id: 8, razon_social: 'Forestal Paraguay', activo: true },
       { id: 9, razon_social: 'Proveedor inactivo', activo: false },
     ],
+    predios: [
+      { id: 20, descripcion: 'Yegros', cliente_id: 10, activo: true },
+      { id: 21, descripcion: 'Predio inactivo', cliente_id: 10, activo: false },
+    ],
     equipos: [{ id: 2, patente: 'AB 123 CD', descripcion: 'Camión', activo: true }],
     unidadesNegocio: [{ id: 4, descripcion: 'Forestal', prefijo: 'F', activo: true }],
     isOffline: false,
@@ -138,8 +142,12 @@ describe('TripImageUpload', () => {
 
     const client = wrapper.get('select[aria-label="Cliente"]')
     const provider = wrapper.get('select[aria-label="Proveedor"]')
+    const predio = wrapper.get('select[aria-label="Predio"]')
     expect(client.element.value).toBe('10')
     expect(provider.element.value).toBe('8')
+    expect(predio.element.value).toBe('20')
+    expect(predio.text()).toContain('Yegros')
+    expect(predio.text()).not.toContain('Predio inactivo')
     expect(client.text()).toContain('Alcogreen')
     expect(client.text()).not.toContain('Cliente inactivo')
     expect(provider.text()).toContain('Forestal Paraguay')

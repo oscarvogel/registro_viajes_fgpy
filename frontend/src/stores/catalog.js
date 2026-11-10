@@ -8,6 +8,7 @@ export const useCatalogStore = defineStore('catalog', {
         empleados: [],
             clientes: [],
         proveedores: [],
+        predios: [],
         equipos: [],
         panioles: [],
         unidadesNegocio: [],
@@ -25,12 +26,13 @@ export const useCatalogStore = defineStore('catalog', {
                     axios.get(`${API_URL}/equipos`, { params: { limit: 10000 } }),
                     axios.get(`${API_URL}/panioles`, { params: { limit: 10000 } }),
                     axios.get(`${API_URL}/unidades-negocio`, { params: { limit: 10000 } }),
-                    axios.get(`${API_URL}/clientes`, { params: { limit: 10000 } })
+                    axios.get(`${API_URL}/clientes`, { params: { limit: 10000 } }),
+                    axios.get(`${API_URL}/predios`, { params: { limit: 10000 } })
                 ];
 
                 const settled = await Promise.allSettled(requests);
                 const results = settled.map(r => (r.status === 'fulfilled' ? r.value : null));
-                const [empRes, provRes, eqRes, panRes, unRes, cliRes] = results;
+                const [empRes, provRes, eqRes, panRes, unRes, cliRes, preRes] = results;
 
                 if (!cliRes) console.warn('Advertencia: /clientes no respondió correctamente o devolvió error');
 
@@ -44,10 +46,12 @@ export const useCatalogStore = defineStore('catalog', {
                 this.panioles = Array.isArray(panRes.data) ? panRes.data : [];
                 this.unidadesNegocio = Array.isArray(unRes.data) ? unRes.data : [];
                 this.clientes = cliRes && Array.isArray(cliRes.data) ? cliRes.data : [];
+                this.predios = preRes && Array.isArray(preRes.data) ? preRes.data : [];
 
                 console.log('📦 Catálogos obtenidos:', {
                     empleados: this.empleados.length,
                     proveedores: this.proveedores.length,
+                    predios: this.predios.length,
                     equipos: this.equipos.length,
                     panioles: this.panioles.length,
                     unidadesNegocio: this.unidadesNegocio.length
@@ -66,6 +70,7 @@ export const useCatalogStore = defineStore('catalog', {
                 await saveToStore('proveedores', JSON.parse(JSON.stringify(this.proveedores)));
                 await saveToStore('equipos', JSON.parse(JSON.stringify(this.equipos)));
                 await saveToStore('clientes', JSON.parse(JSON.stringify(this.clientes)));
+                await saveToStore('predios', JSON.parse(JSON.stringify(this.predios)));
                 // Filter out invalid panioles before saving
                 const validPanioles = this.panioles.filter(p => p && p.id);
                 console.log('💾 Guardando pañoles válidos:', validPanioles.length, 'de', this.panioles.length);
@@ -91,6 +96,7 @@ export const useCatalogStore = defineStore('catalog', {
                 this.empleados = (await getAllFromStore('empleados')) || [];
                 this.proveedores = (await getAllFromStore('proveedores')) || [];
                 this.clientes = (await getAllFromStore('clientes')) || [];
+                this.predios = (await getAllFromStore('predios')) || [];
                 this.equipos = (await getAllFromStore('equipos')) || [];
                 this.panioles = (await getAllFromStore('panioles')) || [];
                 this.unidadesNegocio = (await getAllFromStore('unidadesNegocio')) || [];

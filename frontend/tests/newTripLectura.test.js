@@ -130,6 +130,64 @@ test('buildViajePayload incluye la lectura normalizada y el permiso de lectura m
   assert.equal(payload.patente, 'ABC123')
 })
 
+// El payload de viaje se arma campo por campo, asi que puede quedar algo que
+// el backend exige y el frontend no manda (por ejemplo, cuando el backend
+// suma un campo obligatorio). Este test lee el contrato del backend y
+// comprueba que el payload lo cubre entero.
+const camposObligatoriosDeRegistroViaje = async () => {
+  const source = await read('../../backend/schemas.py')
+  const inicio = source.indexOf('class RegistroViajeCreate')
+  assert.ok(inicio > -1, 'no se encontro RegistroViajeCreate en backend/schemas.py')
+  let bloque = source.slice(inicio)
+  const fin = bloque.search(/\nclass\s+\w+/)
+  if (fin > -1) bloque = bloque.slice(0, fin)
+
+  const campos = []
+  for (const linea of bloque.split(/\r?\n/)) {
+    const match = linea.match(/^\s{4}([a-z_][a-z0-9_]*)\s*:\s*([^\r\n]+)$/i)
+    if (!match) continue
+    const anotacion = match[2].split('#')[0].trim()
+    if (!anotacion.includes('=')) campos.push(match[1])
+  }
+  return campos
+}
+
+test('el payload de viaje incluye todos los campos que el backend exige', async () => {
+  const obligatorios = await camposObligatoriosDeRegistroViaje()
+  assert.ok(obligatorios.length > 0, 'no se pudo leer el contrato del backend')
+
+  const payload = buildViajePayload({
+    form: {
+      fecha_remision: '2026-11-09',
+      fecha_recepcion: '2026-11-09',
+      proveedor_id: 3,
+      cliente_id: 4,
+      predio_id: 5,
+      remito_prov_tipo: '002',
+      remito_prov_sucursal: '001',
+      remito_prov_numero: '0008880',
+      remito_fpv_tipo: '',
+      remito_fpv_sucursal: '',
+      remito_fpv_numero: '',
+      lote: 'L1',
+      peso_bruto_destino: 20,
+      tara_destino: 8,
+      neto_destino: 12,
+      neto_origen: 11,
+      chofer_id: 7,
+      patente: 'ABC123',
+      unidad_negocio_id: 1,
+      observaciones: '',
+    },
+    userId: 7,
+    lecturaCamion: 1234.5,
+    permitirLecturaMenor: false,
+  })
+
+  const faltantes = obligatorios.filter((campo) => payload[campo] === undefined)
+  assert.deepEqual(faltantes, [], `el payload de viaje no manda: ${faltantes.join(', ')}`)
+})
+
 test('el historial muestra la lectura de cada viaje', async () => {
   const history = await read('../src/views/History.vue')
   assert.match(history, /item\.lectura_camion/)
