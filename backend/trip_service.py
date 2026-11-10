@@ -2,17 +2,28 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 import models
-from logger import set_request_context
+from logger import app_logger, sanitize_for_logging, set_request_context
 
 
 NETO_MAX_TN = Decimal("200.0")
 PESO_TOLERANCIA_TN = Decimal("0.010")
 DB_WEIGHT_SCALE = Decimal("0.01")
+
+UNIDAD_KM = "km"
+UNIDAD_HS = "hs"
+UNIDADES_VALIDAS = (UNIDAD_KM, UNIDAD_HS)
+# Tope de la columna tablero_produccion.lectura_camion (DECIMAL(10, 2)).
+# Sin este control, una lectura desmedida revienta la DB con un 500.
+MAX_LECTURA_CAMION = Decimal("99999999.99")
+# Escala de la lectura: 2 decimales, como la columna. Es una constante propia
+# y no DB_WEIGHT_SCALE, que es la escala de los pesos: si esa cambia, la
+# escala de la lectura no tiene que cambiar con ella.
+LECTURA_SCALE = Decimal("0.01")
 
 
 def _decimal(name, value, *, allow_none=False):
@@ -155,7 +166,7 @@ def _weights(registro):
     return origen_db, _quantize(bruto), _quantize(tara), _quantize(destino_neto), origen_db
 
 
-def _build_record(registro, employee, equipo, proveedor_id, cliente_id, predio_id, weights):
+def _build_record(registro, employee, equipo, proveedor_id, cliente_id, predio_id, weights, lectura=None, unidad=None):
     neto_origen, bruto, tara, neto_destino, produccion = weights
     remito_proveedor = (registro.numero_remision or "").strip() or None
     remito_fgpy = (registro.numero_remision_fpv or "").strip() or None
@@ -168,6 +179,7 @@ def _build_record(registro, employee, equipo, proveedor_id, cliente_id, predio_i
         periodo=f"{registro.fecha_remision.year}{registro.fecha_remision.month:02d}",
         proveedor_id=proveedor_id, bruto_destino=bruto, tara_destino=tara,
         neto_origen=neto_origen, neto_destino=neto_destino, pesaje_unico=registro.pesaje_unico,
+        lectura_camion=lectura, unidad_lectura=unidad,
         hr_inicio=0.0, hr_fin=0.0, unidad_produccion_id=5, coeficiente=1.0,
         altura=0.0, ancho=0.0, cantidad_estibas=0.0, largo_madera=0.0,
         carros=0, plantas=0, hrs_no_operativas=0, carga_piso=0,
@@ -185,8 +197,9 @@ def create_trip(db: Session, registro, effective_user, commit=True):
     set_request_context(chofer=f"{employee.apellido} {employee.nombre}")
     set_request_context(vehiculo=f"{equipo.patente} - {equipo.descripcion}")
     proveedor_id, cliente_id, predio_id = _catalogs(db, registro)
+    lectura, unidad = validar_lectura(db, registro, equipo, usuario=employee.id)
     record = _build_record(
-        registro, employee, equipo, proveedor_id, cliente_id, predio_id, _weights(registro)
+        registro, employee, equipo, proveedor_id, cliente_id, predio_id, _weights(registro), lectura, unidad
     )
     db.add(record)
     try:
@@ -205,3 +218,97 @@ def create_trip(db: Session, registro, effective_user, commit=True):
         if commit:
             db.rollback()
         raise
+
+
+def unidad_de_equipo(equipo):
+    """Devuelve la unidad de medida del equipo: 'km' o 'hs'.
+
+    La unidad es fija por camion y la define el admin en equipos.unidad_hr_km.
+    Si el valor guardado no es valido se cae a 'km'.
+    """
+    valor = str(getattr(equipo, "unidad_hr_km", None) or UNIDAD_KM).strip().lower()
+    return valor if valor in UNIDADES_VALIDAS else UNIDAD_KM
+
+
+def ultima_lectura(db, equipo_id, unidad):
+    """Ultimo viaje del equipo con lectura registrada en la misma unidad.
+
+    Ignora los viajes sin lectura y los movimientos de carreton (usan hr_fin).
+    """
+    return (
+        db.query(models.TableroProduccion)
+        .filter(
+            models.TableroProduccion.equipo_id == equipo_id,
+            models.TableroProduccion.unidad_lectura == unidad,
+            models.TableroProduccion.lectura_camion.isnot(None),
+            # Los movimientos de carreton no son viajes: aunque fueran a mano
+            # con una lectura, no forman parte de la cadena del odometro.
+            # Se excluyen por nombre en vez de exigir tabla IS NULL para no
+            # dejar fuera viajes normales legados.
+            # Ojo: en MySQL/MariaDB 'IS NOT' solo admite NULL/TRUE/FALSE, no
+            # un texto, asi que el filtro va como OR explicito.
+            or_(
+                models.TableroProduccion.tabla.is_(None),
+                models.TableroProduccion.tabla != "movimiento_carreton",
+            ),
+        )
+        .order_by(models.TableroProduccion.fecha.desc(), models.TableroProduccion.id.desc())
+        .first()
+    )
+
+
+def validar_lectura(db, registro, equipo, usuario=None):
+    """Valida la lectura del camion y devuelve (lectura, unidad) a persistir.
+
+    - Si el payload no trae lectura, devuelve (None, None): el backend es
+      tolerante y guarda NULL.
+    - La unidad la resuelve el servidor desde el equipo; el cliente no la manda.
+    - Si la lectura es menor a la anterior y no viene permitir_lectura_menor,
+      se rechaza con 400 indicando el valor anterior.
+    - Si viene permitir_lectura_menor, se acepta y queda rastro en el log:
+      el flag lo manda el cliente y desactiva una validacion de negocio, asi
+      que sin registro no habria forma de reconstruir despues que ese viaje
+      se guardo con override.
+    """
+    if registro.lectura_camion is None:
+        return None, None
+
+    lectura = _decimal("lectura_camion", registro.lectura_camion)
+    if lectura <= 0:
+        raise HTTPException(status_code=400, detail="La lectura del camion debe ser mayor a 0")
+    # El tope se compara contra el valor crudo, antes del redondeo: si se
+    # redondeara primero, un valor enorme lanzaria InvalidOperation al
+    # cuantizar y responderia 500 en vez de 400.
+    if lectura > MAX_LECTURA_CAMION:
+        raise HTTPException(
+            status_code=400,
+            detail=f"La lectura del camion no puede superar {MAX_LECTURA_CAMION}",
+        )
+    lectura = lectura.quantize(LECTURA_SCALE, rounding=ROUND_HALF_UP)
+
+    unidad = unidad_de_equipo(equipo)
+    anterior = ultima_lectura(db, equipo.id, unidad)
+    if anterior is not None:
+        previa = Decimal(str(anterior.lectura_camion))
+        if lectura < previa:
+            if not registro.permitir_lectura_menor:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"La lectura ({lectura}) no puede ser menor a la ultima registrada "
+                        f"({previa}) para este camion"
+                    ),
+                )
+            app_logger.warning(
+                "Viaje con lectura del camion menor confirmada por el usuario",
+                extra={"extra_data": sanitize_for_logging({
+                    "equipo_id": getattr(equipo, "id", None),
+                    "patente": getattr(equipo, "patente", None),
+                    "lectura_camion": str(lectura),
+                    "lectura_anterior": str(previa),
+                    "unidad": unidad,
+                    "usuario": usuario,
+                    "confirmado_por_usuario": True,
+                })},
+            )
+    return lectura, unidad

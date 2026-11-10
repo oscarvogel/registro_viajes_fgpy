@@ -147,3 +147,35 @@ test('syncOnePendingRecord blocks carreton validation errors but not network err
   assert.equal(network.authRequired, false)
   assert.equal(network.detail, 'offline')
 })
+
+test('preparePendingPayload convierte la lectura en numero', () => {
+  const { payload } = preparePendingPayload({
+    record_type: 'viaje',
+    patente: 'ABC123',
+    lectura_camion: '1234.5',
+    permitir_lectura_menor: true,
+  }, { clientLogger: { userId: 7 } })
+
+  assert.equal(payload.lectura_camion, 1234.5)
+  assert.equal(payload.permitir_lectura_menor, true)
+})
+
+test('preparePendingPayload normaliza la lectura con separadores locales', () => {
+  const { payload } = preparePendingPayload({
+    record_type: 'viaje',
+    patente: 'ABC123',
+    lectura_camion: '1.234,5',
+  }, { clientLogger: { userId: 7 } })
+
+  assert.equal(payload.lectura_camion, 1234.5)
+})
+
+test('preparePendingPayload omite la lectura vacia', () => {
+  const { payload } = preparePendingPayload({
+    record_type: 'viaje',
+    patente: 'ABC123',
+    lectura_camion: '',
+  }, { clientLogger: { userId: 7 } })
+
+  assert.equal('lectura_camion' in payload, false)
+})

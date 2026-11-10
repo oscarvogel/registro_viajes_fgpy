@@ -6,14 +6,17 @@ import {
   buildFuelLastKmParams,
   buildFuelPayload,
   buildHistoryRequests,
+  buildViajePayload,
   findEquipoByPatente,
   findUnidadById,
   getLastFuelKmHora,
   getPendingCarretonLastKm,
+  getPendingViajeLastLectura,
   getStoredUserId,
   normalizeKilometraje,
   normalizeFuelRemito,
   normalizeApiList,
+  normalizarLectura,
 } from '../src/services/criticalScreens.js'
 
 const createStorage = (user) => ({
@@ -191,4 +194,90 @@ test('carreton payload converts Paraguayan thousands separators before syncing',
   assert.equal(payload.km_inicial, 99624)
   assert.equal(payload.km_final, 99635)
   assert.equal(payload.usuario, '55')
+})
+
+test('normalizarLectura acepta coma y punto decimales', () => {
+  assert.equal(normalizarLectura('1.234,5'), 1234.5)
+  assert.equal(normalizarLectura('1234.5'), 1234.5)
+  assert.equal(normalizarLectura('1234'), 1234)
+  assert.equal(normalizarLectura(1234), 1234)
+  assert.ok(Number.isNaN(normalizarLectura('')))
+  assert.ok(Number.isNaN(normalizarLectura('abc')))
+})
+
+test('getPendingViajeLastLectura toma la lectura pendiente mas reciente del camion', () => {
+  const pendientes = [
+    { record_type: 'viaje', patente: 'ABC123', lectura_camion: 100, local_id: 1 },
+    { record_type: 'viaje', patente: 'ABC123', lectura_camion: 250, local_id: 2 },
+    { record_type: 'viaje', patente: 'XYZ789', lectura_camion: 999, local_id: 3 },
+    { record_type: 'carreton', patente: 'ABC123', km_final: 5000, local_id: 4 },
+  ]
+
+  assert.equal(getPendingViajeLastLectura(pendientes, 'ABC123'), 250)
+  assert.equal(getPendingViajeLastLectura(pendientes, 'XYZ789'), 999)
+  assert.equal(getPendingViajeLastLectura(pendientes, 'NOPE111'), null)
+  assert.equal(getPendingViajeLastLectura([], 'ABC123'), null)
+})
+
+test('getPendingViajeLastLectura compara patentes normalizadas', () => {
+  const pendientes = [
+    { record_type: 'viaje', patente: 'AB 123 CD', lectura_camion: 300, local_id: 1 },
+  ]
+
+  assert.equal(getPendingViajeLastLectura(pendientes, 'AB123CD'), 300)
+})
+
+test('getPendingViajeLastLectura ignora viajes sin lectura', () => {
+  const pendientes = [
+    { record_type: 'viaje', patente: 'ABC123', lectura_camion: null, local_id: 1 },
+  ]
+
+  assert.equal(getPendingViajeLastLectura(pendientes, 'ABC123'), null)
+})
+
+test('buildViajePayload incluye la lectura y el permiso de menor', () => {
+  const payload = buildViajePayload({
+    form: {
+      fecha_remision: '2026-11-09',
+      fecha_recepcion: '2026-11-09',
+      proveedor_id: 1,
+      cliente_id: 2,
+      remito_prov_tipo: '002',
+      remito_prov_sucursal: '003',
+      remito_prov_numero: '0000001',
+      remito_fpv_tipo: '002',
+      remito_fpv_sucursal: '003',
+      remito_fpv_numero: '0000002',
+      lote: '',
+      peso_bruto_destino: 50,
+      tara_destino: 18,
+      neto_destino: 32,
+      neto_origen: 32,
+      chofer_id: 7,
+      patente: 'ABC123',
+      unidad_negocio_id: 1,
+      observaciones: '',
+    },
+    userId: 7,
+    lecturaCamion: '1.234,5',
+    permitirLecturaMenor: true,
+  })
+
+  assert.equal(payload.lectura_camion, 1234.5)
+  assert.equal(payload.permitir_lectura_menor, true)
+  assert.equal(payload.numero_remision, '002-003-0000001')
+  assert.equal(payload.numero_remision_fpv, '002-003-0000002')
+  assert.equal(payload.patente, 'ABC123')
+})
+
+test('buildViajePayload omite la lectura cuando no se cargo', () => {
+  const payload = buildViajePayload({
+    form: { fecha_remision: '2026-11-09', patente: 'ABC123' },
+    userId: 7,
+    lecturaCamion: '',
+    permitirLecturaMenor: false,
+  })
+
+  assert.equal('lectura_camion' in payload, false)
+  assert.equal(payload.permitir_lectura_menor, false)
 })

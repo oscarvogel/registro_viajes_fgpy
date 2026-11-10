@@ -114,6 +114,9 @@ class Equipo(Base):
     movil_asociado = Column(Integer, nullable=False)
     codigo_kobo = Column(String(50))
     ult_hr_km = Column(DECIMAL(10, 2), nullable=False, default=0.0)
+    # Unidad de la lectura del tablero del camion: 'km' o 'hs'.
+    # Default 'km' para que los equipos existentes no cambien de unidad.
+    unidad_hr_km = Column(String(3), nullable=False, default="km", server_default="km")
 
 class UnidadNegocio(Base):
     __tablename__ = "unidades_negocio"
@@ -213,6 +216,11 @@ class TableroProduccion(Base):
     tara_destino = Column(DECIMAL(10, 2), nullable=False, default=0.0)
 
     neto_destino = Column(DECIMAL(10, 2), nullable=False, default=0.0)
+
+    # Lectura acumulada del tablero del camion (km o horas) al cerrar el viaje.
+    # NULL = no registrada. La unidad queda como snapshot de la lectura.
+    lectura_camion = Column(DECIMAL(10, 2), nullable=True)
+    unidad_lectura = Column(String(3), nullable=True)
     # Relationships
     empleado = relationship("Empleado")
     equipo = relationship("Equipo")

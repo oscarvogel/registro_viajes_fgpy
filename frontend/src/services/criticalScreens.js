@@ -113,3 +113,100 @@ export const buildCarretonPayload = ({ form, userId }) => ({
   destino_carreton: form.destino_carreton ? form.destino_carreton.trim() : '',
   usuario: `${userId}`,
 })
+
+export const LECTURA_STORAGE_PREFIX = 'lectura_camion_'
+
+// La unidad cruda es la que guarda el backend ('km' | 'hs'); la etiqueta
+// amable es la que se muestra al chofer ('km' | 'horas'). El cliente nunca
+// manda la unidad: solo la usa para etiquetar el campo.
+export const UNIDAD_LECTURA_LABELS = { km: 'km', hs: 'horas' }
+
+export const getUnidadLecturaLabel = (equipo) => {
+  const raw = String(equipo?.unidad_hr_km || 'km').toLowerCase()
+  return UNIDAD_LECTURA_LABELS[raw] || 'km'
+}
+
+export const toUnidadLecturaLabel = (unidad) => {
+  const raw = String(unidad || '').toLowerCase()
+  return UNIDAD_LECTURA_LABELS[raw] || 'km'
+}
+
+export const normalizarLectura = (value) => {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : NaN
+
+  const raw = String(value ?? '').trim()
+  if (!raw) return NaN
+
+  const compact = raw.replace(/\s+/g, '')
+
+  if (compact.includes(',') && compact.includes('.')) {
+    return Number(compact.replace(/\./g, '').replace(',', '.'))
+  }
+
+  if (compact.includes(',')) {
+    return Number(compact.replace(',', '.'))
+  }
+
+  if (/^\d{1,3}(\.\d{3})+$/.test(compact)) {
+    return Number(compact.replace(/\./g, ''))
+  }
+
+  return Number(compact)
+}
+
+export const getPendingViajeLastLectura = (pendingRecords, patente) => {
+  const target = normalizePatente(patente)
+  if (!target) return null
+
+  const sameCamion = (pendingRecords || [])
+    .filter((record) => (record.record_type || 'viaje') === 'viaje'
+      && normalizePatente(record.patente) === target
+      && record.lectura_camion !== undefined
+      && record.lectura_camion !== null
+      && record.lectura_camion !== '')
+    .sort((left, right) => (left.local_id || 0) - (right.local_id || 0))
+
+  if (sameCamion.length === 0) return null
+
+  const value = normalizarLectura(sameCamion[sameCamion.length - 1].lectura_camion)
+  return Number.isFinite(value) ? value : null
+}
+
+const padZeros = (value, length) => String(value || '').padStart(length, '0')
+
+export const combineRemito = (tipo, sucursal, numero) => {
+  if (!tipo && !sucursal && !numero) return ''
+  const t = padZeros(tipo, 3)
+  const s = padZeros(sucursal, 3)
+  const n = padZeros(numero, 7)
+  return `${t}-${s}-${n}`
+}
+
+export const buildViajePayload = ({ form, userId, lecturaCamion, permitirLecturaMenor }) => {
+  const payload = {
+    fecha_remision: form.fecha_remision,
+    fecha_recepcion: form.fecha_recepcion,
+    proveedor_id: form.proveedor_id,
+    cliente_id: form.cliente_id,
+    predio_id: Number(form.predio_id),
+    numero_remision: combineRemito(form.remito_prov_tipo, form.remito_prov_sucursal, form.remito_prov_numero),
+    numero_remision_fpv: combineRemito(form.remito_fpv_tipo, form.remito_fpv_sucursal, form.remito_fpv_numero),
+    lote: form.lote,
+    peso_bruto_destino: Number(form.peso_bruto_destino),
+    tara_destino: Number(form.tara_destino),
+    neto_destino: Number(form.neto_destino),
+    neto_origen: Number(form.neto_origen),
+    chofer_id: Number(form.chofer_id || userId),
+    patente: form.patente,
+    unidad_negocio_id: Number(form.unidad_negocio_id || 1),
+    observaciones: form.observaciones,
+    permitir_lectura_menor: Boolean(permitirLecturaMenor),
+  }
+
+  const lectura = normalizarLectura(lecturaCamion)
+  if (Number.isFinite(lectura) && lectura > 0) {
+    payload.lectura_camion = lectura
+  }
+
+  return payload
+}
