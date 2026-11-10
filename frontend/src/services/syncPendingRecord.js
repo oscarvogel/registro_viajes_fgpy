@@ -1,3 +1,5 @@
+import { normalizarLectura } from './criticalScreens.js'
+
 export const getPendingRecordType = (record) => record?.record_type || 'viaje'
 
 export const getPendingRecordEndpoint = (recordType) => {
@@ -38,6 +40,16 @@ export const preparePendingPayload = (record, { clientLogger, storage } = {}) =>
 
   if (payload.neto_origen) payload.neto_origen = Number(payload.neto_origen)
   if (payload.neto_destino) payload.neto_destino = Number(payload.neto_destino)
+  if (payload.lectura_camion !== undefined && payload.lectura_camion !== null && payload.lectura_camion !== '') {
+    const lectura = normalizarLectura(payload.lectura_camion)
+    if (Number.isFinite(lectura)) {
+      payload.lectura_camion = lectura
+    } else {
+      delete payload.lectura_camion
+    }
+  } else {
+    delete payload.lectura_camion
+  }
   if (payload.km_inicial !== undefined) payload.km_inicial = Number(payload.km_inicial)
   if (payload.km_final !== undefined) payload.km_final = Number(payload.km_final)
   if (payload.equipo_id !== undefined && payload.equipo_id !== '') payload.equipo_id = Number(payload.equipo_id)
