@@ -275,7 +275,13 @@ from datetime import date, time
 from pathlib import Path
 
 
-class LecturaCamionServicioTest(unittest.TestCase):
+class LecturaCamionBaseTest(unittest.TestCase):
+    """Fixture compartida: base SQLite aislada con los datos minimos.
+
+    Las clases de servicio y de endpoint heredan de aca. La base no define
+    tests propios, asi que no se ejecutan por duplicado.
+    """
+
     def setUp(self):
         self.tmpdir = tempfile.TemporaryDirectory()
         db_path = os.path.join(self.tmpdir.name, "lectura_camion_test.db")
@@ -387,6 +393,8 @@ class LecturaCamionServicioTest(unittest.TestCase):
         registro = self._registro(**overrides)
         return self.trip_service.create_trip(self.db, registro, self.empleado)
 
+
+class LecturaCamionServicioTest(LecturaCamionBaseTest):
     def test_guarda_la_lectura_con_la_unidad_resuelta_del_equipo(self):
         viaje = self._crear_viaje(lectura_camion=1234.5)
         self.assertEqual(float(viaje.lectura_camion), 1234.5)
@@ -660,7 +668,7 @@ git commit -m "feat(viajes): validar y persistir la lectura del camion en tabler
 Agregar a `backend/test_trip_lectura_camion.py`:
 
 ```python
-class LecturaCamionEndpointTest(LecturaCamionServicioTest):
+class LecturaCamionEndpointTest(LecturaCamionBaseTest):
     def test_ultima_lectura_devuelve_la_lectura_del_ultimo_viaje(self):
         self._crear_viaje(lectura_camion=7777, numero_remision="002-003-0000061")
 
