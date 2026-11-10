@@ -8,10 +8,26 @@ import Autocomplete from '../components/Autocomplete.vue';
 import Swal from 'sweetalert2';
 import { API_URL } from '../config';
 import { safeConsole } from '../services/safeConsole';
+import {
+    findEquipoByPatente,
+    buildViajePayload,
+    combineRemito,
+    getPendingViajeLastLectura,
+    getUnidadLecturaLabel,
+    normalizarLectura,
+    toUnidadLecturaLabel,
+    LECTURA_STORAGE_PREFIX
+} from '../services/criticalScreens.js';
 
 const router = useRouter();
 const catalog = useCatalogStore();
 const sync = useSyncStore();
+
+// Interruptor de obligatoriedad de la lectura. Lo define el admin en
+// GET /api/app-version; por defecto la lectura es obligatoria.
+const exigirLecturaCamion = ref(true);
+const ultimaLectura = ref(null);
+const cargandoUltimaLectura = ref(false);
 
 const form = ref({
     fecha_remision: new Date().toISOString().split('T')[0],
@@ -31,12 +47,104 @@ const form = ref({
     neto_origen: 0,
     chofer_id: '',
     patente: '',
+    lectura_camion: '',
     unidad_negocio_id: 1,
     observaciones: ''
 });
 
+// La unidad la define el admin por camion (equipos.unidad_hr_km) y llega en el
+// catalogo de equipos. Solo se usa para etiquetar el campo: el cliente nunca
+// manda la unidad, la resuelve el servidor.
+const unidadLecturaLabel = computed(() => getUnidadLecturaLabel(findEquipoByPatente(catalog.equipos, form.value.patente)));
+
+const applyUltimaLectura = (value) => {
+    if (value === null || value === undefined) {
+        ultimaLectura.value = null;
+        return;
+    }
+    const lectura = normalizarLectura(value.lectura_camion);
+    if (!Number.isFinite(lectura) || lectura <= 0) {
+        ultimaLectura.value = null;
+        return;
+    }
+    ultimaLectura.value = {
+        lectura: lectura,
+        unidad: value.unidad_lectura ? toUnidadLecturaLabel(value.unidad_lectura) : unidadLecturaLabel.value,
+        fecha: value.fecha || null
+    };
+};
+
+const fetchUltimaLectura = async (equipoId) => {
+    if (!equipoId) {
+        ultimaLectura.value = null;
+        return;
+    }
+
+    const storageKey = `${LECTURA_STORAGE_PREFIX}${equipoId}`;
+
+    // Si hay viajes pendientes de este camion, la ultima lectura es la del
+    // pendiente mas reciente (puede ser mas nueva que la del servidor).
+    const pendingLectura = getPendingViajeLastLectura(sync.pendingRecords, form.value.patente);
+    if (pendingLectura !== null) {
+        applyUltimaLectura({ lectura_camion: pendingLectura });
+        return;
+    }
+
+    cargandoUltimaLectura.value = true;
+    try {
+        const response = await axios.get(`${API_URL}/registro-viaje/ultima-lectura`, {
+            params: { equipo_id: Number(equipoId) }
+        });
+        applyUltimaLectura(response.data);
+        if (response.data && response.data.lectura_camion !== null && response.data.lectura_camion !== undefined) {
+            try {
+                localStorage.setItem(storageKey, String(response.data.lectura_camion));
+            } catch (e) {
+                // Sin localStorage disponible se sigue igual
+            }
+        }
+    } catch (error) {
+        // El endpoint puede no existir todavia (o no hay red): se usa el valor
+        // cacheado en el dispositivo para que el formulario no se rompa.
+        let cached = null;
+        try {
+            cached = localStorage.getItem(storageKey);
+        } catch (e) {
+            cached = null;
+        }
+        if (cached !== null && cached !== '') {
+            applyUltimaLectura({ lectura_camion: cached });
+        } else {
+            ultimaLectura.value = null;
+        }
+    } finally {
+        cargandoUltimaLectura.value = false;
+    }
+};
+
 onMounted(async () => {
     await catalog.fetchCatalogues();
+
+    // Interruptor de obligatoriedad de la lectura. Si no se puede consultar
+    // (sin red o endpoint nuevo), se usa el valor cacheado en el dispositivo.
+    try {
+        const versionRes = await axios.get(`${API_URL}/app-version`);
+        exigirLecturaCamion.value = versionRes.data?.exigir_lectura_camion !== false;
+        try {
+            localStorage.setItem('exigir_lectura_camion', String(exigirLecturaCamion.value));
+        } catch (e) {
+            // Sin localStorage disponible se sigue igual
+        }
+    } catch (error) {
+        try {
+            const cachedFlag = localStorage.getItem('exigir_lectura_camion');
+            if (cachedFlag !== null) {
+                exigirLecturaCamion.value = cachedFlag !== 'false';
+            }
+        } catch (e) {
+            exigirLecturaCamion.value = true;
+        }
+    }
 
     // Auto-select logged in driver
     const userStr = localStorage.getItem('user');
@@ -58,6 +166,19 @@ onMounted(async () => {
     const defaultUnidadNegocio = localStorage.getItem('default_unidad_negocio');
     if (defaultUnidadNegocio) {
         form.value.unidad_negocio_id = parseInt(defaultUnidadNegocio);
+    }
+
+    // Los viajes pendientes locales son la referencia mas reciente cuando hay
+    // viajes todavia no sincronizados de este camion.
+    try {
+        await sync.loadPending();
+    } catch (e) {
+        // Sin pendientes no hay ultima lectura local que consultar
+    }
+
+    const equipo = findEquipoByPatente(catalog.equipos, form.value.patente);
+    if (equipo) {
+        await fetchUltimaLectura(equipo.id);
     }
 });
 
@@ -102,14 +223,6 @@ const onRemitoPadNumero = (field) => {
     form.value[field] = padZeros(form.value[field], 7);
 };
 
-const combineRemito = (tipo, sucursal, numero) => {
-    if (!tipo && !sucursal && !numero) return '';
-    const t = padZeros(tipo, 3);
-    const s = padZeros(sucursal, 3);
-    const n = padZeros(numero, 7);
-    return `${t}-${s}-${n}`;
-};
-
 const remitoPattern = /^\d{3}-\d{3}-\d{7}$/;
 
 const submitForm = async () => {
@@ -125,6 +238,42 @@ const submitForm = async () => {
             confirmButtonColor: '#007AFF'
         });
         return;
+    }
+
+    // Lectura del tablero: el operador puede escribirla con coma decimal
+    // (1234,5) porque el campo no es un input numerico.
+    const lecturaValor = normalizarLectura(form.value.lectura_camion);
+    const lecturaValida = Number.isFinite(lecturaValor) && lecturaValor > 0;
+
+    if (exigirLecturaCamion.value && !lecturaValida) {
+        Swal.fire({
+            icon: 'warning',
+            title: 'Faltan datos',
+            text: 'Complete la lectura de km/horas del camion',
+            confirmButtonColor: '#007AFF'
+        });
+        return;
+    }
+
+    // La lectura es acumulada: si es menor a la anterior del mismo camion se
+    // avisa y el chofer confirma con "Guardar igual".
+    let permitirLecturaMenor = false;
+    if (lecturaValida && ultimaLectura.value && lecturaValor < ultimaLectura.value.lectura) {
+        const confirmacion = await Swal.fire({
+            icon: 'warning',
+            title: 'Lectura menor que la anterior',
+            html: `La lectura (${lecturaValor}) es menor a la ultima registrada (${ultimaLectura.value.lectura}).<br>¿Desea continuar y guardar el registro igual?`,
+            showCancelButton: true,
+            confirmButtonText: 'Guardar igual',
+            cancelButtonText: 'Cancelar',
+            confirmButtonColor: '#d97706'
+        });
+        if (!confirmacion.isConfirmed) {
+            return;
+        }
+        // El chofer confirmo con "Guardar igual": el payload viaja con
+        // permitir_lectura_menor = true para que el backend lo acepte.
+        permitirLecturaMenor = true;
     }
 
     // Combinar campos de remito
@@ -204,11 +353,21 @@ const submitForm = async () => {
             // If offline or error, allow local save; backend will validate on sync
         }
 
-        const result = await sync.saveRecord({
-            ...form.value,
-            numero_remision,
-            numero_remision_fpv
-        }, 'viaje');
+        const result = await sync.saveRecord(buildViajePayload({
+            form: form.value,
+            userId: form.value.chofer_id,
+            lecturaCamion: lecturaValor,
+            permitirLecturaMenor: permitirLecturaMenor
+        }), 'viaje');
+        if (lecturaValida) {
+            // La lectura recien guardada pasa a ser la referencia para el
+            // proximo registro de esta pantalla.
+            ultimaLectura.value = {
+                lectura: lecturaValor,
+                unidad: unidadLecturaLabel.value,
+                fecha: new Date().toISOString().split('T')[0]
+            };
+        }
         if (result?.synced) {
             Swal.fire({
                 icon: 'success',
@@ -420,6 +579,24 @@ const submitForm = async () => {
             <label class="block text-xs font-medium text-gray-500 mb-1">Patente</label>
             <input v-model="form.patente" type="text" class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white uppercase" disabled>
             <div class="text-xs text-gray-400 mt-1">Se configura desde Ajustes</div>
+        </div>
+
+        <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">
+                Lectura del camion ({{ unidadLecturaLabel }}) <span v-if="exigirLecturaCamion" class="text-red-500">*</span>
+            </label>
+            <input
+                v-model="form.lectura_camion"
+                type="text"
+                inputmode="decimal"
+                autocomplete="off"
+                class="w-full p-2 rounded border dark:bg-gray-800 dark:border-gray-700 dark:text-white"
+                placeholder="Lectura actual del tablero">
+            <div v-if="cargandoUltimaLectura" class="text-xs text-gray-400 mt-1">Buscando ultima lectura...</div>
+            <div v-else-if="ultimaLectura" class="text-xs text-gray-400 mt-1">
+                Ultima lectura: {{ ultimaLectura.lectura.toFixed(2) }} {{ ultimaLectura.unidad }}
+            </div>
+            <div v-else class="text-xs text-gray-400 mt-1">Aun no hay lecturas registradas para este camion.</div>
         </div>
 
         <button type="submit" class="w-full bg-blue-600 text-white py-3 rounded-lg font-medium shadow-lg mt-4">
